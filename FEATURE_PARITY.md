@@ -14,5 +14,9 @@
 | Apple TV-client | Uitbreidingspunt | Nog geen tvOS-client. Browser/AirPlay-schermspiegeling is geen primaire afspeelmethode. |
 | Multi-variant adaptive bitrate | Beperkt | HLS-profiel wordt centraal gekozen; wisselen van kwaliteit start een passend profiel. Geen gelijktijdige masterplaylist met alle varianten. |
 | GitHub Releases-updates | Beschikbaar | Download/controle wel; installatie blijft bewust handmatig en vereist toestemming. |
+| Serie- en afleveringsmetadata | Beschikbaar | TVmaze, lokale NFO, embedded tags en handmatige correctie; bronvermelding inbegrepen. |
+| Filmmetadata | Beschikbaar, OMDb optioneel | Zonder key blijven NFO, embedded, bestaande en handmatige metadata werken. |
+| Metadata-editor en artwork | Beschikbaar | Veldlocks, provenance, historie/herstel en veilige lokale/HTTPS-afbeeldingen. |
+| Provider-onafhankelijke database | Beschikbaar | Externe IDs, credits, ratings, afbeeldingen en veldstatus staan los van één provider. |
 
 ThuisHub bevat geen Plex-code of -merken en ontgrendelt geen betaalde diensten. Internet-tv, huurfilms en partnercontent vereisen eigen legale bronnen en rechten.

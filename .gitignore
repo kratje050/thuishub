@@ -6,6 +6,7 @@ credentials.*
 secrets.*
 config.local.*
 settings.local.*
+secrets.json
 
 # Afhankelijkheden en gegenereerde uitvoer
 node_modules/
@@ -19,6 +20,7 @@ out/
 release/
 coverage/
 .cache/
+metadata-cache/
 
 # Productie- en testgegevens
 data/
@@ -54,6 +56,7 @@ tmp/
 *.m3u
 *.m3u8
 *.xmltv
+*.nfo
 
 # IDE en besturingssysteem
 .DS_Store

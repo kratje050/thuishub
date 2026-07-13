@@ -264,6 +264,124 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS device_commands_pending_idx ON device_commands(device_id,acknowledged_at,id);
+  CREATE TABLE IF NOT EXISTS metadata_external_ids (
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    provider TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    legacy INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(media_id,provider)
+  );
+  CREATE INDEX IF NOT EXISTS metadata_external_lookup_idx ON metadata_external_ids(provider,external_id);
+  CREATE TABLE IF NOT EXISTS metadata_field_state (
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    field_name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    value_json TEXT,
+    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    manually_modified INTEGER NOT NULL DEFAULT 0,
+    auto_overwrite INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY(media_id,field_name)
+  );
+  CREATE TABLE IF NOT EXISTS metadata_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    field_name TEXT NOT NULL,
+    previous_value_json TEXT,
+    new_value_json TEXT,
+    provider TEXT NOT NULL,
+    manual INTEGER NOT NULL DEFAULT 0,
+    changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS metadata_history_media_idx ON metadata_history(media_id,changed_at DESC);
+  CREATE TABLE IF NOT EXISTS metadata_credits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    credit_type TEXT NOT NULL CHECK(credit_type IN ('cast','crew')),
+    name TEXT NOT NULL,
+    role TEXT,
+    character_name TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    provider TEXT NOT NULL,
+    UNIQUE(media_id,credit_type,name,role,character_name)
+  );
+  CREATE TABLE IF NOT EXISTS metadata_ratings (
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    value REAL NOT NULL,
+    max_value REAL NOT NULL DEFAULT 10,
+    votes INTEGER,
+    provider TEXT NOT NULL,
+    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(media_id,source)
+  );
+  CREATE TABLE IF NOT EXISTS metadata_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    image_type TEXT NOT NULL CHECK(image_type IN ('poster','backdrop','banner','logo','landscape','episode')),
+    provider TEXT NOT NULL,
+    original_url TEXT,
+    local_path TEXT,
+    content_type TEXT,
+    byte_size INTEGER,
+    sha256 TEXT,
+    manually_selected INTEGER NOT NULL DEFAULT 0,
+    selected INTEGER NOT NULL DEFAULT 0,
+    downloaded_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(media_id,image_type,provider,original_url,local_path)
+  );
+  CREATE INDEX IF NOT EXISTS metadata_images_selected_idx ON metadata_images(media_id,image_type,selected);
+  CREATE TABLE IF NOT EXISTS metadata_provider_cache (
+    provider TEXT NOT NULL,
+    cache_key TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    etag TEXT,
+    last_modified TEXT,
+    status_code INTEGER NOT NULL DEFAULT 200,
+    stored_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TEXT NOT NULL,
+    PRIMARY KEY(provider,cache_key)
+  );
+  CREATE TABLE IF NOT EXISTS metadata_provider_state (
+    provider TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_success_at TEXT,
+    last_error_at TEXT,
+    last_error TEXT,
+    rate_limited_until TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS metadata_provider_usage (
+    provider TEXT NOT NULL,
+    usage_date TEXT NOT NULL,
+    requests INTEGER NOT NULL DEFAULT 0,
+    cache_hits INTEGER NOT NULL DEFAULT 0,
+    cache_misses INTEGER NOT NULL DEFAULT 0,
+    failures INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(provider,usage_date)
+  );
+  CREATE TABLE IF NOT EXISTS metadata_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+    operation TEXT NOT NULL DEFAULT 'fill_missing',
+    preferred_provider TEXT,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued','processing','review','completed','error')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(media_id,operation,status)
+  );
+  CREATE INDEX IF NOT EXISTS metadata_queue_status_idx ON metadata_queue(status,id);
+  CREATE TABLE IF NOT EXISTS metadata_migration_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL,
+    report_json TEXT NOT NULL DEFAULT '{}',
+    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at TEXT
+  );
 `);
 
 function ensureColumn(table: string, column: string, definition: string) {
@@ -279,6 +397,32 @@ ensureColumn('media_items', 'genres', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('media_items', 'edition', 'TEXT');
 ensureColumn('media_items', 'original_title', 'TEXT');
 ensureColumn('media_items', 'tagline', 'TEXT');
+ensureColumn('media_items', 'metadata_provider', 'TEXT');
+ensureColumn('media_items', 'metadata_last_refreshed', 'TEXT');
+ensureColumn('media_items', 'metadata_match_confidence', 'TEXT');
+ensureColumn('media_items', 'metadata_needs_review', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('media_items', 'metadata_runtime_minutes', 'INTEGER');
+ensureColumn('media_items', 'premiered', 'TEXT');
+ensureColumn('media_items', 'original_content_rating', 'TEXT');
+ensureColumn('media_items', 'metadata_language', 'TEXT');
+ensureColumn('media_items', 'metadata_country', 'TEXT');
+ensureColumn('media_items', 'studio', 'TEXT');
+ensureColumn('media_items', 'directors', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('media_items', 'writers', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('media_items', 'cast_json', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('media_items', 'ratings_json', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('media_items', 'official_url', 'TEXT');
+ensureColumn('media_items', 'banner_path', 'TEXT');
+ensureColumn('media_items', 'absolute_episode', 'INTEGER');
+ensureColumn('media_items', 'aired', 'TEXT');
+ensureColumn('media_items', 'display_season', 'INTEGER');
+ensureColumn('media_items', 'display_episode', 'INTEGER');
+ensureColumn('media_items', 'metadata_tags', "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn('media_items', 'series_status', 'TEXT');
+ensureColumn('media_items', 'metadata_network', 'TEXT');
+ensureColumn('media_items', 'streaming_service', 'TEXT');
+ensureColumn('media_items', 'awards', 'TEXT');
+ensureColumn('media_items', 'trailer_url', 'TEXT');
 ensureColumn('media_items', 'color_transfer', 'TEXT');
 ensureColumn('media_items', 'container', 'TEXT');
 ensureColumn('media_items', 'probe_json', "TEXT NOT NULL DEFAULT '{}'");
@@ -313,13 +457,13 @@ export function setSetting(key: string, value: string): void {
 }
 
 export function publicSettings() {
-  const token = getSetting('tmdbToken');
   return {
     version: APP_VERSION,
     serverName: getSetting('serverName', 'ThuisHub'),
     language: getSetting('language', 'nl-NL'),
-    tmdbConfigured: Boolean(token),
-    tmdbTokenMasked: token ? `${token.slice(0, 4)}••••${token.slice(-4)}` : '',
+    metadataCacheDays: Number(getSetting('metadataCacheDays','14')),
+    omdbLocalDailyLimit: Number(getSetting('omdbLocalDailyLimit','1000')),
+    metadataStrategy:getSetting('metadataStrategy','local_first'),
     autoplay: getSetting('autoplay', 'true') === 'true',
     rewindOnResume: Number(getSetting('rewindOnResume', '8')),
     skipIntro: getSetting('skipIntro', 'true') === 'true',

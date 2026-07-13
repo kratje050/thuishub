@@ -21,5 +21,13 @@ Automatische tests bewijzen beslislogica en updatebeveiliging, maar niet de fysi
 | DTS/DTS-HD/DTS:X | capability aan/uit | passthrough of audiotranscode | Logica geslaagd; receivertest nodig |
 | SRT/WebVTT/ASS/PGS/forced | direct of burn-in | waarschuwing bij video-transcode | Logica geslaagd; fixturetest nodig |
 | 80+ Mbps | LAN Direct Play | geen onnodige transcode/buffer | Snelle gigabit-LAN-test nodig |
+| TVmaze serie | exacte serie, seizoenen, specials en aflevering | unieke match toegepast, dubbelzinnige match naar controle | Softwaretests geslaagd; visueel controleren |
+| OMDb film | geldige/ongeldige key, geen key en lokale daglimiet | key nooit zichtbaar; duidelijke fout/fallback | Softwaretests geslaagd |
+| Lokale NFO | movie/tvshow/episode, beschadigde XML, padtraversal | geldige velden toegepast; fout beperkt tot bestand | Softwaretests geslaagd |
+| Metadata offline | netwerk uit, cache gevuld/leeg | cache of lokale fallback; bibliotheek blijft bruikbaar | Handmatig netwerk uitschakelen |
+| Afbeeldingscache | JPEG/PNG/WebP, SVG, privé-IP en redirect | alleen veilige rasterafbeelding lokaal aangeboden | Softwaretests geslaagd |
+| Handmatige veldlock | handmatig aanpassen en provider verversen | waarde blijft behouden; historie kan herstellen | Softwaretests geslaagd |
+| Leeftijd onbekend | beperkt profiel en ontbrekende classificatie | niet automatisch als AL tonen | Softwarelogica geslaagd |
+| Legacy-migratie | kopie van oudere database met provider-ID/key | back-up eerst, data behouden, sleutel weg, nul oude requests | Softwaretests geslaagd |
 
 Test productiegegevens nooit door ze te wijzigen. Gebruik tijdelijke mediakopieën en controleer vóór/na `PRAGMA integrity_check`, aantallen gebruikers/media/progress/Live TV/DVR en de meest recente back-up.

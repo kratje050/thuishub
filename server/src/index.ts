@@ -8,6 +8,7 @@ import { optionalAuth } from './auth.js';
 import { clearTranscodes } from './transcode.js';
 import { startDvrScheduler } from './live-tv.js';
 import { startBackupScheduler } from './backup.js';
+import { migrateLegacyTmdbMetadata, startMetadataQueueWorker } from './metadata/index.js';
 import { APP_NAME, APP_PORT, APP_VERSION } from './constants.js';
 import { getSetting, markCleanShutdown } from './db.js';
 import { log, setMaxLogStorageMb } from './logger.js';
@@ -46,6 +47,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 const server = app.listen(port, host, () => {
   startDvrScheduler();
   startBackupScheduler();
+  void migrateLegacyTmdbMetadata().catch(error => console.error('Metadata-migratie mislukt:',error instanceof Error?error.message:String(error))).finally(()=>startMetadataQueueWorker());
   console.log(`\n${APP_NAME} ${APP_VERSION} draait op http://localhost:${port}\n`);
   log('INFO', 'server', 'Server gestart.', { host, port });
   if (getSetting('automaticUpdateCheck', 'false') === 'true') void checkForUpdates();

@@ -21,6 +21,19 @@ describe('bestandsherkenning', () => {
     const parsed = parseMediaName(path.join(root, 'Dark', 'Dark 1x04 Double Lives.mp4'), root, 'series');
     expect(parsed).toMatchObject({ seriesTitle: 'Dark', season: 1, episode: 4, title: 'Double Lives' });
   });
+
+  it('ondersteunt datumafleveringen', () => {
+    const root = path.join('C:', 'Series');
+    const parsed = parseMediaName(path.join(root, 'Nieuws', 'Nieuws 2026-07-13 Avond.mkv'), root, 'series');
+    expect(parsed).toMatchObject({ seriesTitle: 'Nieuws', aired: '2026-07-13', title: 'Avond' });
+  });
+
+  it('ondersteunt absolute afleveringsnummers', () => {
+    const root = path.join('C:', 'Series');
+    for (const name of ['Anime E123 Titel.mkv', 'Anime EP123 Titel.mkv', 'Anime [123] Titel.mkv', 'Anime - 123 Titel.mkv']) {
+      expect(parseMediaName(path.join(root, 'Anime', name), root, 'series')).toMatchObject({ seriesTitle: 'Anime', absoluteEpisode: 123, title: 'Titel' });
+    }
+  });
 });
 
 describe('afspeelstrategie', () => {

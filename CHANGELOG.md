@@ -4,6 +4,10 @@
 
 - Windows-updates vervangen de oude programmaversie voortaan volledig automatisch en starten daarna de nieuwe versie.
 - De stille upgrade gebruikt de bestaande veilige verwijderprocedure met behoud van bibliotheken, database, instellingen, voortgang en back-ups.
+- De actieve TMDB-koppeling is vervangen door een modulaire providerlaag met TVmaze, optionele OMDb, lokale NFO, ingebedde metadata en handmatige metadata.
+- Metadata heeft nu per-veldherkomst, locks, historie/herstel, confidence matching, een begrensde achtergrondwachtrij en een providerdashboard.
+- Externe afbeeldingen worden gecontroleerd op formaat, grootte, redirects, SSRF en corruptie en daarna alleen vanuit een lokale cache aangeboden.
+- Een eerste migratie maakt vooraf een databaseback-up, behoudt legacy-data en verwijdert de oude sleutel zonder oude providerrequests te doen.
 
 ## 1.2.2 — 13 juli 2026
 

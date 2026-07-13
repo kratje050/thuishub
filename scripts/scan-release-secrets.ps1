@@ -48,14 +48,14 @@ try {
     Write-Warning 'Gitleaks is niet geïnstalleerd; de ingebouwde strikte fallbackscan is gebruikt.'
   }
 
-  $privacyPatterns = @('roy\.tail5d685a\.ts\.net','C:\\Users\\stava','[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')
+  $privacyPatterns = @('https://[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.ts\.net','C:\\Users\\[^\\/\s]+','[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')
   $textTargets = @('README.md','CHANGELOG.md','FEATURE_PARITY.md','SECURITY.md','docs','release\latest.json','release\SHA256SUMS.txt','release\RELEASE_NOTES.md') | Where-Object { Test-Path $_ }
   foreach ($pattern in $privacyPatterns) {
     $matches = Find-TextPattern -Pattern $pattern -Targets $textTargets
     if ($matches) { throw "Privacycontrole vond persoonlijke gegevens (waarden niet weergegeven). Patroon: $pattern" }
   }
   if ($IncludeReleaseArtifacts -and (Test-Path 'release')) {
-    $privateLiterals = @('roy.tail5d685a.ts.net','C:\Users\stava')
+    $privateLiterals = @('.ts.net','C:\Users\')
     $binaryAssets = Get-ChildItem -LiteralPath 'release' -File | Where-Object { $_.Extension -in '.exe','.apk','.wgt' }
     foreach ($asset in $binaryAssets) {
       $matches = Find-PrivateLiteralInBinary -Path $asset.FullName -Needles $privateLiterals

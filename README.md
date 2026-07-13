@@ -2,6 +2,10 @@
 
 ThuisHub is een lokale Windows-mediaserver voor eigen films, series, muziek, foto's en Live TV/DVR. De beheerinterface blijft op `http://127.0.0.1:8787`; de Windows-app en browser gebruiken dezelfde lokale gegevens in `%APPDATA%\ThuisHub\data`.
 
+## Metadata
+
+De ontwikkelversie gebruikt een modulaire metadata-laag: TVmaze voor series, optioneel OMDb voor films, lokale Kodi-NFO-bestanden, ingebedde bestandstags en een handmatige editor met veldlocks en herstelhistorie. API-keys blijven lokaal; externe afbeeldingen worden gecontroleerd en gecachet voordat de browser ze toont. Zie [Metadata en providers](docs/METADATA_PROVIDERS.md).
+
 ## Nieuw in 1.2.2
 
 - Gedownloade updates kunnen vanuit het dashboard met **Installeren en herstarten** worden uitgevoerd.
@@ -75,3 +79,5 @@ Publicatie gebeurt nooit automatisch. Zie [docs/GITHUB_RELEASES.md](docs/GITHUB_
 - [Privé-LAN-streaming](docs/LOCAL_NETWORK_STREAMING.md), [apparaatcompatibiliteit](docs/DEVICE_COMPATIBILITY.md)
 - [GitHub Releases](docs/GITHUB_RELEASES.md), [openbare repositorybeveiliging](docs/PUBLIC_REPOSITORY_SECURITY.md)
 - [Handmatige testmatrix](docs/MANUAL_TEST_MATRIX.md)
+- [Metadata en providers](docs/METADATA_PROVIDERS.md), [TVmaze](docs/TVMAZE.md), [OMDb](docs/OMDB.md), [lokale NFO](docs/LOCAL_NFO_METADATA.md)
+- [Metadata-migratie](docs/METADATA_MIGRATION.md), [metadata en privacy](docs/METADATA_PRIVACY.md)

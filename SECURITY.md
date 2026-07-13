@@ -17,6 +17,10 @@ De persoonlijke beheerinterface heeft bewust geen inlogscherm en gebruikt automa
 
 Nooit committen of publiceren: `.env`, tokens, wachtwoorden, M3U/XMLTV-credentials, databases, logs, back-ups, gebruikersgegevens, lokale paden/IP's/hostnamen, certificaten, privésleutels of signingwachtwoorden. De uitgebreide `.gitignore` blokkeert deze categorieën. `scripts\scan-release-secrets.ps1` gebruikt Gitleaks wanneer geïnstalleerd en anders een strikte lokale fallback.
 
+De optionele OMDb-key staat uitsluitend in `%APPDATA%\ThuisHub\data\secrets.json` of de lokale omgevingsvariabele `OMDB_API_KEY`. ThuisHub beperkt op Windows de bestands-ACL, geeft alleen een gemaskeerde status aan de browser en redigeert `apikey` uit foutteksten en URLs. Providerverzoeken bevatten alleen titel, jaar of een noodzakelijke externe ID; nooit mediabestanden, gebruikersnamen, kijkgeschiedenis of Tailscale-adressen.
+
+Externe artwork-URLs accepteren alleen HTTP(S). ThuisHub controleert DNS, blokkeert localhost, privé-, link-local-, multicast- en metadata-service-adressen, valideert iedere redirect opnieuw, begrenst tijd en bytes en decodeert het beeld met `sharp` voordat het in de lokale cache komt. Externe beschrijvingen en namen worden als onbetrouwbaar behandeld en van uitvoerbare HTML en besturingstekens ontdaan.
+
 De openbare repository `kratje050/thuishub` is uitsluitend voor release-assets, hashes, release notes en openbare documentatie. De volledige broncode blijft in een afzonderlijke privérepository. Publicatiescripts slaan geen GitHub-token op en maken standaard een conceptrelease.
 
 ## Updates

@@ -7,7 +7,12 @@ import { execFile } from 'node:child_process';
 import { createUser, requireAdmin, requireAuth } from '../auth.js';
 import { databaseIntegrity, db, getSetting, publicSettings, setSetting } from '../db.js';
 import { scanLibrary, scanState } from '../media.js';
-import { applyTmdb, enrichMedia, searchTmdb, testTmdbToken } from '../tmdb.js';
+import { applyLocalMetadata, applyProviderMatch, metadataContext, metadataDashboard, metadataProviders, metadataStatusForMedia, migrateLegacyTmdbMetadata, processMetadataMedia, retryMetadataQueue, searchMetadata } from '../metadata/index.js';
+import { applyManualMetadata, metadataFieldStates, metadataHistory, restoreMetadataHistory, setMetadataFieldLock } from '../metadata/apply.js';
+import { cacheExternalImage, cacheLocalImage, clearMetadataImageCache, imageApiUrl, metadataImageFile, removeMetadataImage, selectMetadataImage } from '../metadata/images.js';
+import { clearProviderCache, providerOrder, setProviderEnabled, setProviderOrder } from '../metadata/store.js';
+import { clearOmdbApiKey, getOmdbApiKey, secretsStatus, setOmdbApiKey } from '../metadata/secrets.js';
+import type { MetadataProviderId } from '../metadata/types.js';
 import { ensureHls, hlsFile, isDirectPlayable } from '../transcode.js';
 import { detectedGpus, videoEncoder } from '../ffmpeg.js';
 import { listActivity, patchActivity, removeActivity, updateActivity } from '../activity.js';
@@ -35,13 +40,13 @@ apiRouter.post('/devices/pair/request', (req,res,next)=>{try{res.status(201).jso
 apiRouter.post('/devices/pair/claim', (req,res)=>{const result=claimPairing(String(req.body?.deviceId||''),String(req.body?.pairingSecret||''));res.status(result.status==='expired'?410:200).json(result)});
 apiRouter.get('/device/commands',requireDevice,(req,res)=>res.json({items:pendingDeviceCommands(req.playbackDevice!.id)}));
 apiRouter.post('/device/commands/:id/ack',requireDevice,(req,res)=>res.json({ok:acknowledgeDeviceCommand(req.playbackDevice!.id,Number(req.params.id))}));
-apiRouter.get('/device/library',requireDevice,(req,res)=>{const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;if(!profile)return res.status(403).end();const rows=db.prepare('SELECT * FROM media_items ORDER BY sort_title COLLATE NOCASE').all() as any[];const max=deviceRatingLevels[String(profile.maxRating||'ALL').toUpperCase().replace(/[- ]/g,'_')]??99;res.json(rows.filter(row=>profile.role==='admin'||!row.content_rating||(deviceRatingLevels[String(row.content_rating).toUpperCase().replace(/[- ]/g,'_')]??0)<=max).map(row=>({id:row.id,kind:row.kind,title:row.title,seriesTitle:row.series_title,season:row.season,episode:row.episode,year:row.year,width:row.width,height:row.height,hdrType:row.hdr_type,audioCodec:row.audio_codec,atmos:Boolean(row.atmos),posterUrl:row.poster_path?`https://image.tmdb.org/t/p/w500${row.poster_path}`:null})))});
+apiRouter.get('/device/library',requireDevice,(req,res)=>{const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;if(!profile)return res.status(403).end();const rows=db.prepare('SELECT * FROM media_items ORDER BY sort_title COLLATE NOCASE').all() as any[];const max=deviceRatingLevels[String(profile.maxRating||'ALL').toUpperCase().replace(/[- ]/g,'_')]??99;res.json(rows.filter(row=>profile.role==='admin'||max===99||Boolean(row.content_rating&&row.content_rating!=='ONBEKEND'&&(deviceRatingLevels[String(row.content_rating).toUpperCase().replace(/[- ]/g,'_')]??99)<=max)).map(row=>({id:row.id,kind:row.kind,title:row.title,seriesTitle:row.series_title,season:row.season,episode:row.episode,year:row.year,width:row.width,height:row.height,hdrType:row.hdr_type,audioCodec:row.audio_codec,atmos:Boolean(row.atmos),posterUrl:imageApiUrl(row.id,'poster')})))});
 apiRouter.post('/device/media/:id/decision',requireDevice,(req,res)=>{const mediaId=Number(req.params.id);const row=db.prepare('SELECT * FROM media_items WHERE id=?').get(mediaId) as any;if(!row)return res.status(404).json({error:'Media niet gevonden.'});const capabilities=deviceCapabilities(req.playbackDevice!.id);if(!capabilities)return res.status(403).json({error:'Apparaatprofiel ontbreekt.'});const decision=decisionEngine({media:mediaCapabilitiesFromRow(row),device:capabilities,quality:(req.body?.quality||'auto') as QualityId,availableBandwidthMbps:Number(req.body?.availableBandwidthMbps)||undefined,network:req.body?.network||'lan'});const address=getSetting('localStreamingAddress','');const port=Number(getSetting('localStreamingPort','8788'));const base=address?`http://${address}:${port}`:`${req.protocol}://${req.get('host')}`;const resource=decision.mode==='direct_play'?'file':'hls';const token=createPlaybackToken({mediaId,resource,userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id,options:{copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight}},resource==='file'?600:3600);const subtitle=row.subtitle_path?createPlaybackToken({mediaId,resource:'subtitle',userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id},3600):'';res.json({decision,technical:mediaCapabilitiesFromRow(row),urls:{playback:`${base}/api/playback/${mediaId}/${resource==='file'?'file':'hls/index.m3u8'}?token=${encodeURIComponent(token)}`,subtitle:subtitle?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitle)}`:''}})});
 apiRouter.put('/device/media/:id/progress',requireDevice,(req,res)=>{const position=Math.max(0,Number(req.body?.position)||0);const duration=Math.max(0,Number(req.body?.duration)||0);const completed=duration>0&&position/duration>=.92?1:0;db.prepare(`INSERT INTO progress(user_id,media_id,position,duration,completed,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id,media_id) DO UPDATE SET position=excluded.position,duration=excluded.duration,completed=excluded.completed,updated_at=CURRENT_TIMESTAMP`).run(req.playbackDevice!.userId,Number(req.params.id),position,duration,completed);res.json({position,duration,completed:Boolean(completed)})});
 apiRouter.use(requireAuth);
 
 const ratingLevels:Record<string,number>={ALL:99,AL:0,G:0,TV_Y:0,TV_G:0,'6':6,PG:8,TV_PG:9,'9':9,'12':12,PG_13:13,'14':14,TV_14:14,'16':16,R:16,NC_17:18,'18':18,TV_MA:18};
-function ratingAllowed(rating:string|null,max:string|undefined,admin:boolean){if(admin||!max||max==='ALL'||!rating)return true;const normalize=(x:string)=>x.toUpperCase().replace(/[- ]/g,'_');return(ratingLevels[normalize(rating)]??0)<=(ratingLevels[normalize(max)]??99)}
+function ratingAllowed(rating:string|null,max:string|undefined,admin:boolean){if(admin||!max||max==='ALL')return true;if(!rating||rating==='ONBEKEND')return false;const normalize=(x:string)=>x.toUpperCase().replace(/[- ]/g,'_');return(ratingLevels[normalize(rating)]??99)<=(ratingLevels[normalize(max)]??99)}
 
 apiRouter.get('/bootstrap', (req, res) => {
   const sources = db.prepare('SELECT id, name, path, kind, created_at createdAt FROM sources ORDER BY name').all();
@@ -89,12 +94,12 @@ apiRouter.get('/library', (req, res) => {
     id: item.id, kind: item.kind, title: item.title, year: item.year, seriesTitle: item.series_title,
     season: item.season, episode: item.episode, duration: item.duration, size: item.size,
     videoCodec: item.video_codec, audioCodec: item.audio_codec, width: item.width, height: item.height,
-    overview: item.overview, posterUrl: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : null,
-    backdropUrl: item.backdrop_path ? `https://image.tmdb.org/t/p/w1280${item.backdrop_path}` : null,
-    tmdbId: item.tmdb_id, hasSubtitle: Boolean(item.subtitle_path), directPlay: isDirectPlayable(item),
+    overview: item.overview, posterUrl:imageApiUrl(item.id,'poster'),backdropUrl:imageApiUrl(item.id,'backdrop'),
+    hasSubtitle: Boolean(item.subtitle_path), directPlay: isDirectPlayable(item),
     progress: item.position ? { position: item.position, duration: item.progress_duration, completed: Boolean(item.completed) } : null,
     state: { favorite: Boolean(item.favorite), watchlist: Boolean(item.watchlist), watched: Boolean(item.watched || item.completed), rating: item.user_rating },
-    contentRating: item.content_rating, genres: JSON.parse(item.genres || '[]'), edition: item.edition, tagline: item.tagline,
+    contentRating: item.content_rating, originalContentRating:item.original_content_rating, genres: JSON.parse(item.genres || '[]'), edition: item.edition, tagline: item.tagline,metadataProvider:item.metadata_provider,metadataConfidence:item.metadata_match_confidence,metadataNeedsReview:Boolean(item.metadata_needs_review),
+    originalTitle:item.original_title,sortTitle:item.sort_title,runtimeMinutes:item.metadata_runtime_minutes,language:item.metadata_language,country:item.metadata_country,studio:item.studio,directors:JSON.parse(item.directors||'[]'),writers:JSON.parse(item.writers||'[]'),cast:JSON.parse(item.cast_json||'[]'),ratings:JSON.parse(item.ratings_json||'[]'),premiered:item.premiered,officialUrl:item.official_url,absoluteEpisode:item.absolute_episode,aired:item.aired,
     hdr: ['smpte2084','arib-std-b67'].includes((item.color_transfer || '').toLowerCase())
   })));
 });
@@ -189,9 +194,10 @@ apiRouter.patch('/media/:id', requireAdmin, (req, res) => {
   const edition = typeof req.body.edition === 'string' ? req.body.edition.trim() : existing.edition;
   const tagline = typeof req.body.tagline === 'string' ? req.body.tagline.trim() : existing.tagline;
   const genres = Array.isArray(req.body.genres) ? JSON.stringify(req.body.genres.map(String).slice(0, 20)) : existing.genres;
-  db.prepare(`UPDATE media_items SET title=?,sort_title=?,overview=?,year=?,content_rating=?,edition=?,tagline=?,genres=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).run(title, title.toLocaleLowerCase('nl'), overview, year, contentRating, edition, tagline, genres, mediaId);
+  const wholeNumber=(value:unknown,label:string,minimum=0)=>{if(value===undefined)return undefined;if(value===null||value==='')return null;const parsed=Number(value);if(!Number.isInteger(parsed)||parsed<minimum)throw Object.assign(new Error(`${label} moet een geheel getal van minimaal ${minimum} zijn.`),{status:400});return parsed};
+  const extra=applyManualMetadata(mediaId,{title,sortTitle:req.body.sortTitle,overview,year,contentRating,edition,tagline,genres:JSON.parse(genres),originalTitle:req.body.originalTitle,runtimeMinutes:req.body.runtimeMinutes,language:req.body.language,country:req.body.country,studio:req.body.studio,directors:req.body.directors,writers:req.body.writers,cast:req.body.cast,ratings:req.body.ratings,premiered:req.body.premiered,officialUrl:req.body.officialUrl,season:wholeNumber(req.body.season,'Seizoen'),episode:wholeNumber(req.body.episode,'Aflevering'),absoluteEpisode:wholeNumber(req.body.absoluteEpisode,'Absoluut afleveringsnummer',1),aired:req.body.aired,imdbId:req.body.imdbId,tvmazeId:req.body.tvmazeId});
   audit(req.user!.id, 'media.edit', { mediaId });
-  res.json({ id: mediaId, title, overview, year, contentRating, edition, tagline, genres: JSON.parse(genres) });
+  res.json({ id: mediaId, title, overview, year, contentRating, edition, tagline, genres: JSON.parse(genres),...extra });
 });
 
 apiRouter.get('/media/:id/download', (req, res) => {
@@ -231,13 +237,13 @@ apiRouter.post('/media/:id/markers/auto', requireAdmin, (req, res) => {
 apiRouter.get('/collections', (req, res) => res.json(db.prepare(`SELECT c.id,c.name,c.description,c.is_public isPublic,COUNT(ci.media_id) itemCount FROM collections c LEFT JOIN collection_items ci ON ci.collection_id=c.id WHERE c.owner_id=? OR c.is_public=1 GROUP BY c.id ORDER BY c.name`).all(req.user!.id)));
 apiRouter.post('/collections', (req, res) => { const name=String(req.body.name||'').trim(); if(!name)return res.status(400).json({error:'Geef de collectie een naam.'}); const result=db.prepare('INSERT INTO collections(owner_id,name,description,is_public) VALUES(?,?,?,?)').run(req.user!.id,name,String(req.body.description||''),Number(Boolean(req.body.isPublic))); res.status(201).json({id:Number(result.lastInsertRowid),name,description:String(req.body.description||''),isPublic:Boolean(req.body.isPublic),itemCount:0}); });
 apiRouter.put('/collections/:id/items/:mediaId', (req,res)=>{const collection=db.prepare('SELECT id FROM collections WHERE id=? AND owner_id=?').get(Number(req.params.id),req.user!.id);if(!collection)return res.status(404).json({error:'Collectie niet gevonden.'});db.prepare('INSERT OR IGNORE INTO collection_items(collection_id,media_id,position) VALUES(?,?,(SELECT COUNT(*) FROM collection_items WHERE collection_id=?))').run(Number(req.params.id),Number(req.params.mediaId),Number(req.params.id));res.status(204).end();});
-apiRouter.get('/collections/:id/items', (req,res)=>res.json(db.prepare(`SELECT m.id,m.kind,m.title,m.series_title seriesTitle,m.year,m.poster_path posterPath,ci.position FROM collection_items ci JOIN media_items m ON m.id=ci.media_id JOIN collections c ON c.id=ci.collection_id WHERE ci.collection_id=? AND (c.owner_id=? OR c.is_public=1) ORDER BY ci.position`).all(Number(req.params.id),req.user!.id)));
+apiRouter.get('/collections/:id/items', (req,res)=>{const rows=db.prepare(`SELECT m.id,m.kind,m.title,m.series_title seriesTitle,m.year,ci.position FROM collection_items ci JOIN media_items m ON m.id=ci.media_id JOIN collections c ON c.id=ci.collection_id WHERE ci.collection_id=? AND (c.owner_id=? OR c.is_public=1) ORDER BY ci.position`).all(Number(req.params.id),req.user!.id) as any[];res.json(rows.map(row=>({...row,posterUrl:imageApiUrl(row.id,'poster')})))});
 apiRouter.delete('/collections/:id', (req,res)=>{db.prepare('DELETE FROM collections WHERE id=? AND owner_id=?').run(Number(req.params.id),req.user!.id);res.status(204).end();});
 
 apiRouter.get('/playlists', (req,res)=>res.json(db.prepare('SELECT p.id,p.name,p.description,COUNT(pi.media_id) itemCount FROM playlists p LEFT JOIN playlist_items pi ON pi.playlist_id=p.id WHERE p.user_id=? GROUP BY p.id ORDER BY p.updated_at DESC').all(req.user!.id)));
 apiRouter.post('/playlists', (req,res)=>{const name=String(req.body.name||'').trim();if(!name)return res.status(400).json({error:'Geef de playlist een naam.'});const result=db.prepare('INSERT INTO playlists(user_id,name,description) VALUES(?,?,?)').run(req.user!.id,name,String(req.body.description||''));res.status(201).json({id:Number(result.lastInsertRowid),name,itemCount:0});});
 apiRouter.put('/playlists/:id/items/:mediaId',(req,res)=>{const playlist=db.prepare('SELECT id FROM playlists WHERE id=? AND user_id=?').get(Number(req.params.id),req.user!.id);if(!playlist)return res.status(404).json({error:'Playlist niet gevonden.'});db.prepare('INSERT OR IGNORE INTO playlist_items(playlist_id,media_id,position) VALUES(?,?,(SELECT COUNT(*) FROM playlist_items WHERE playlist_id=?))').run(Number(req.params.id),Number(req.params.mediaId),Number(req.params.id));db.prepare('UPDATE playlists SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(Number(req.params.id));res.status(204).end();});
-apiRouter.get('/playlists/:id/items',(req,res)=>res.json(db.prepare(`SELECT m.id,m.kind,m.title,m.series_title seriesTitle,m.year,m.duration,m.poster_path posterPath,pi.position FROM playlist_items pi JOIN media_items m ON m.id=pi.media_id JOIN playlists p ON p.id=pi.playlist_id WHERE pi.playlist_id=? AND p.user_id=? ORDER BY pi.position`).all(Number(req.params.id),req.user!.id)));
+apiRouter.get('/playlists/:id/items',(req,res)=>{const rows=db.prepare(`SELECT m.id,m.kind,m.title,m.series_title seriesTitle,m.year,m.duration,pi.position FROM playlist_items pi JOIN media_items m ON m.id=pi.media_id JOIN playlists p ON p.id=pi.playlist_id WHERE pi.playlist_id=? AND p.user_id=? ORDER BY pi.position`).all(Number(req.params.id),req.user!.id) as any[];res.json(rows.map(row=>({...row,posterUrl:imageApiUrl(row.id,'poster')})))});
 apiRouter.delete('/playlists/:id',(req,res)=>{db.prepare('DELETE FROM playlists WHERE id=? AND user_id=?').run(Number(req.params.id),req.user!.id);res.status(204).end();});
 
 apiRouter.get('/optimizations', (_req,res)=>res.json(optimizationList()));
@@ -258,7 +264,7 @@ apiRouter.get('/dashboard', requireAdmin, async (_req,res)=>{
   const tailscale=await tailscaleStatus();
   const backups=listBackups();
   const lastUpdate=JSON.parse(getSetting('lastUpdateResult','{}')||'{}');
-  res.json({version:APP_VERSION,name:APP_NAME,uptimeSeconds:Math.round(process.uptime()),serverStatus:'online',database:{...integrity,file:appPaths.databaseFile},lastBackup:backups[0]||null,update:lastUpdate,tailscale,stats,counts,libraryCounts,activity:listActivity(),gpus:detectedGpus(),encoder:videoEncoder(),recent,optimizations:optimizationList(),storage:{libraryBytes:(stats as any).bytes,dataBytes:directorySize(appPaths.dataDir),logBytes:logStorageBytes()},warnings:[...(!integrity.ok?['De database-integriteitscontrole meldt een probleem.']:[]),...(!tailscale.serveActive?['Externe toegang via Tailscale Serve is niet actief.']:[]),...(backups.length===0?['Er is nog geen back-up gemaakt.']:[])]});
+  res.json({version:APP_VERSION,name:APP_NAME,uptimeSeconds:Math.round(process.uptime()),serverStatus:'online',database:{...integrity,file:appPaths.databaseFile},lastBackup:backups[0]||null,update:lastUpdate,tailscale,stats,counts,libraryCounts,metadata:metadataDashboard(),activity:listActivity(),gpus:detectedGpus(),encoder:videoEncoder(),recent,optimizations:optimizationList(),storage:{libraryBytes:(stats as any).bytes,dataBytes:directorySize(appPaths.dataDir),logBytes:logStorageBytes()},warnings:[...(!integrity.ok?['De database-integriteitscontrole meldt een probleem.']:[]),...(!tailscale.serveActive?['Externe toegang via Tailscale Serve is niet actief.']:[]),...(backups.length===0?['Er is nog geen back-up gemaakt.']:[])]});
 });
 
 function directorySize(directory:string):number{if(!fs.existsSync(directory))return 0;let total=0;for(const entry of fs.readdirSync(directory,{withFileTypes:true})){const file=path.join(directory,entry.name);try{total+=entry.isDirectory()?directorySize(file):fs.statSync(file).size}catch{}}return total}
@@ -367,14 +373,12 @@ apiRouter.get('/folders', requireAdmin, async (req, res) => {
 apiRouter.get('/settings', requireAdmin, (_req, res) => res.json(publicSettings()));
 apiRouter.patch('/settings', requireAdmin, async (req, res, next) => {
   try {
-    const { serverName, language, tmdbToken, autoplay, rewindOnResume, skipIntro, skipCredits, hardwareTranscoding, toneMapping, maxTranscodes, uploadLimitMbps, automaticBackups, backupRetention, backupLocation, automaticUpdateCheck, updateChannel, developmentUpdatesEnabled, maxLogStorageMb,localStreamingEnabled,localStreamingAddress,localStreamingPort,castReceiverAppId,defaultQualityLan,defaultQualityTailscale,defaultQualityMobile,defaultQualityDownload,defaultQualityLiveTv } = req.body || {};
+    const { serverName, language, autoplay, rewindOnResume, skipIntro, skipCredits, hardwareTranscoding, toneMapping, maxTranscodes, uploadLimitMbps, automaticBackups, backupRetention, backupLocation, automaticUpdateCheck, updateChannel, developmentUpdatesEnabled, maxLogStorageMb,localStreamingEnabled,localStreamingAddress,localStreamingPort,castReceiverAppId,defaultQualityLan,defaultQualityTailscale,defaultQualityMobile,defaultQualityDownload,defaultQualityLiveTv,metadataCacheDays,omdbLocalDailyLimit,metadataStrategy } = req.body || {};
     if (typeof serverName === 'string' && serverName.trim()) setSetting('serverName', serverName.trim());
     if (typeof language === 'string' && /^[a-z]{2}-[A-Z]{2}$/.test(language)) setSetting('language', language);
-    if (typeof tmdbToken === 'string' && tmdbToken && !tmdbToken.includes('•')) {
-      await testTmdbToken(tmdbToken.trim());
-      setSetting('tmdbToken', tmdbToken.trim());
-      void enrichMedia();
-    }
+    if(metadataCacheDays!==undefined)setSetting('metadataCacheDays',String(Math.min(365,Math.max(1,Number(metadataCacheDays)||14))));
+    if(omdbLocalDailyLimit!==undefined)setSetting('omdbLocalDailyLimit',String(Math.min(100000,Math.max(1,Number(omdbLocalDailyLimit)||1000))));
+    if(['local_first','online_first','local_only'].includes(metadataStrategy))setSetting('metadataStrategy',metadataStrategy);
     if (typeof autoplay === 'boolean') setSetting('autoplay', String(autoplay));
     if (rewindOnResume !== undefined) setSetting('rewindOnResume', String(Math.min(30, Math.max(0, Number(rewindOnResume) || 0))));
     if (typeof skipIntro === 'boolean') setSetting('skipIntro', String(skipIntro));
@@ -396,7 +400,7 @@ apiRouter.patch('/settings', requireAdmin, async (req, res, next) => {
     if(typeof castReceiverAppId==='string'&&/^[A-F0-9]{0,16}$/i.test(castReceiverAppId))setSetting('castReceiverAppId',castReceiverAppId);
     const qualityValues=QUALITY_PROFILES.map(item=>item.id);for(const[key,value]of Object.entries({defaultQualityLan,defaultQualityTailscale,defaultQualityMobile,defaultQualityDownload,defaultQualityLiveTv}))if(qualityValues.includes(value as any))setSetting(key,String(value));
     res.json(publicSettings());
-  } catch { next(Object.assign(new Error('De TMDB-sleutel is niet geldig.'), { status: 400 })); }
+  } catch(error) { next(error); }
 });
 
 apiRouter.get('/users', requireAdmin, (_req, res) => res.json(db.prepare('SELECT id,username,role,max_content_rating maxContentRating,can_download canDownload,created_at createdAt FROM users ORDER BY username').all()));
@@ -414,17 +418,27 @@ apiRouter.patch('/users/:id', requireAdmin, (req,res)=>{
   res.status(204).end();
 });
 
-apiRouter.get('/metadata/search', requireAdmin, async (req, res, next) => {
-  try {
-    const kind = req.query.kind === 'tv' ? 'tv' : 'movie';
-    const query = String(req.query.query || '').trim();
-    if (!query) return res.status(400).json({ error: 'Geef een zoekterm op.' });
-    res.json(await searchTmdb(kind, query, req.query.year ? Number(req.query.year) : undefined));
-  } catch (error) { next(error); }
-});
-apiRouter.put('/media/:id/metadata', requireAdmin, async (req, res, next) => {
-  try {
-    await applyTmdb(Number(req.params.id), req.body.kind === 'tv' ? 'tv' : 'movie', Number(req.body.tmdbId));
-    res.status(204).end();
-  } catch (error) { next(error); }
-});
+const providerIds=new Set<MetadataProviderId>(['tvmaze','omdb','local_nfo','embedded','manual']);
+function providerId(value:unknown){const id=String(value||'') as MetadataProviderId;if(!providerIds.has(id))throw Object.assign(new Error('Onbekende metadataprovider.'),{status:400});return id}
+apiRouter.get('/metadata/providers',requireAdmin,(_req,res)=>res.json({providers:Object.values(metadataProviders).map(provider=>provider.getProviderStatus()),secrets:secretsStatus(),movieOrder:providerOrder('movie'),seriesOrder:providerOrder('series'),cacheDays:Number(getSetting('metadataCacheDays','14')),omdbLocalDailyLimit:Number(getSetting('omdbLocalDailyLimit','1000')),metadataStrategy:getSetting('metadataStrategy','local_first')}));
+apiRouter.patch('/metadata/providers/:provider',requireAdmin,(req,res,next)=>{try{const id=providerId(req.params.provider);if(typeof req.body?.enabled==='boolean')setProviderEnabled(id,req.body.enabled);res.json(metadataProviders[id].getProviderStatus())}catch(error){next(error)}});
+apiRouter.put('/metadata/provider-order/:kind',requireAdmin,(req,res,next)=>{try{const kind=req.params.kind==='series'?'series':'movie';setProviderOrder(kind,(Array.isArray(req.body?.order)?req.body.order:[]).map(providerId));res.json({kind,order:providerOrder(kind)})}catch(error){next(error)}});
+apiRouter.post('/metadata/providers/:provider/test',requireAdmin,async(req,res,next)=>{try{res.json(await metadataProviders[providerId(req.params.provider)].testConnection())}catch(error){next(error)}});
+apiRouter.put('/metadata/omdb-key',requireAdmin,async(req,res,next)=>{const old=getOmdbApiKey();try{setOmdbApiKey(String(req.body?.key||''));const test=await metadataProviders.omdb.testConnection();if(!test.ok)throw Object.assign(new Error(test.message),{status:400});res.json({...test,...secretsStatus()})}catch(error){if(old)setOmdbApiKey(old);else clearOmdbApiKey();next(error)}});
+apiRouter.delete('/metadata/omdb-key',requireAdmin,(_req,res)=>{clearOmdbApiKey();res.status(204).end()});
+apiRouter.delete('/metadata/cache',requireAdmin,(req,res)=>{const provider=req.query.provider?providerId(req.query.provider):undefined;res.json({responses:clearProviderCache(provider),images:provider?0:clearMetadataImageCache()})});
+apiRouter.get('/metadata/dashboard',requireAdmin,(_req,res)=>res.json(metadataDashboard()));
+apiRouter.post('/metadata/queue/retry',requireAdmin,(_req,res)=>res.json({retried:retryMetadataQueue()}));
+apiRouter.post('/metadata/migrate',requireAdmin,async(_req,res,next)=>{try{res.json(await migrateLegacyTmdbMetadata())}catch(error){next(error)}});
+apiRouter.get('/metadata/images/:id',(req,res)=>{const image=metadataImageFile(Number(req.params.id));if(!image)return res.status(404).end();res.setHeader('Cache-Control','private,max-age=86400,immutable');res.type(image.contentType||'application/octet-stream').sendFile(image.localPath)});
+apiRouter.get('/media/:id/metadata',requireAdmin,(req,res,next)=>{try{res.json(metadataStatusForMedia(Number(req.params.id)))}catch(error){next(error)}});
+apiRouter.get('/media/:id/metadata/search',requireAdmin,async(req,res,next)=>{try{res.json(await searchMetadata(Number(req.params.id),req.query.provider?providerId(req.query.provider):undefined))}catch(error){next(error)}});
+apiRouter.put('/media/:id/metadata/match',requireAdmin,async(req,res,next)=>{try{res.json(await applyProviderMatch(Number(req.params.id),providerId(req.body?.provider),String(req.body?.providerId||''),'very_certain'))}catch(error){next(error)}});
+apiRouter.post('/media/:id/metadata/refresh',requireAdmin,async(req,res,next)=>{try{const id=Number(req.params.id);if(req.body?.mode==='local')return res.json(await applyLocalMetadata(id));res.json(await processMetadataMedia(id,req.body?.mode||'refresh',req.body?.provider?providerId(req.body.provider):undefined))}catch(error){next(error)}});
+apiRouter.post('/media/:id/metadata/images',requireAdmin,async(req,res,next)=>{try{const id=Number(req.params.id);const type=String(req.body?.type||'poster');if(!['poster','backdrop','banner','logo','landscape','episode'].includes(type))return res.status(400).json({error:'Ongeldig afbeeldingstype.'});const context=metadataContext(id);if(typeof req.body?.url==='string'&&req.body.url.trim())return res.status(201).json(await cacheExternalImage(id,{type:type as any,url:req.body.url.trim()},'manual',fetch,true));if(typeof req.body?.localPath==='string'&&req.body.localPath.trim())return res.status(201).json(await cacheLocalImage(id,type as any,req.body.localPath.trim(),context.sourcePath!,true));res.status(400).json({error:'Geef een afbeeldings-URL of lokaal pad op.'})}catch(error){next(error)}});
+apiRouter.put('/media/:id/metadata/images/:imageId/select',requireAdmin,(req,res,next)=>{try{res.json(selectMetadataImage(Number(req.params.id),Number(req.params.imageId)))}catch(error){next(error)}});
+apiRouter.delete('/media/:id/metadata/images/:imageId',requireAdmin,(req,res)=>res.status(removeMetadataImage(Number(req.params.id),Number(req.params.imageId))?204:404).end());
+apiRouter.get('/media/:id/metadata/history',requireAdmin,(req,res)=>res.json(metadataHistory(Number(req.params.id))));
+apiRouter.get('/media/:id/metadata/fields',requireAdmin,(req,res)=>res.json(metadataFieldStates(Number(req.params.id))));
+apiRouter.put('/media/:id/metadata/fields/:field/lock',requireAdmin,(req,res)=>{setMetadataFieldLock(Number(req.params.id),String(req.params.field),Boolean(req.body?.locked));res.status(204).end()});
+apiRouter.post('/media/:id/metadata/history/:historyId/restore',requireAdmin,(req,res,next)=>{try{res.json(restoreMetadataHistory(Number(req.params.id),Number(req.params.historyId)))}catch(error){next(error)}});
