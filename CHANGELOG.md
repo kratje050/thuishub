@@ -1,5 +1,12 @@
 # Wijzigingen
 
+## 1.2.2 — 13 juli 2026
+
+- Het update-dashboard toont na een gecontroleerde download de knop **Installeren en herstarten**.
+- De installer wordt direct vóór uitvoering opnieuw op bestandsnaam, grootte en SHA-256 gecontroleerd.
+- De Windows-app draagt de installer veilig over, sluit app en server af en opent daarna pas de installer.
+- Ook de losse browserserver kan de gecontroleerde installer starten en zichzelf netjes afsluiten.
+
 ## 1.2.1 — 13 juli 2026
 
 - Het volledige inlog- en eerste-installatiescherm is uit de Windows-app, browser en PWA verwijderd.

@@ -1,10 +1,13 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 
 const require = createRequire(import.meta.url);
 const labels = require('../../desktop/tray-labels.cjs') as string[];
+const handoff = require('../../desktop/update-handoff.cjs') as any;
 
 describe('Windows-distributie', () => {
   it('bevat het volledige systeemvakmenu', () => {
@@ -14,10 +17,29 @@ describe('Windows-distributie', () => {
 
   it('configureert portable, installer en veilige upgrade', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
-    expect(packageJson.version).toBe('1.2.1');
+    expect(packageJson.version).toBe('1.2.2');
     expect(packageJson.build.nsis.artifactName).toContain('ThuisHub-Setup');
     expect(packageJson.build.portable.artifactName).toContain('ThuisHub-Portable');
     expect(packageJson.build.appId).toBe('nl.huiskamer.media');
     expect(fs.readFileSync(path.resolve('build/installer.nsh'), 'utf8')).toContain('Huiskamer.lnk');
+  });
+
+  it('accepteert alleen de exacte gecontroleerde installer en verwijdert het overdrachtsbestand', () => {
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'thuishub-handoff-'));
+    try{
+      const version='1.3.0';const fileName=`ThuisHub-Setup-${version}.exe`;const file=path.join(root,fileName);const requestFile=path.join(root,'install-request.json');
+      fs.writeFileSync(file,'installer');const bytes=fs.statSync(file).size;const sha256=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+      fs.writeFileSync(requestFile,JSON.stringify({version,fileName,file,bytes,sha256}));
+      expect(handoff.consumeInstallRequest(requestFile,root)).toMatchObject({version,fileName,file,bytes,sha256});
+      expect(fs.existsSync(requestFile)).toBe(false);
+      expect(()=>handoff.validateInstallRequest({version,fileName,file:path.join(root,'..',fileName),bytes,sha256},root)).toThrow('ontbreekt');
+    }finally{fs.rmSync(root,{recursive:true,force:true})}
+  });
+
+  it('start de installer pas nadat het desktopproces is afgesloten', () => {
+    let call:any;let unref=false;
+    const result=handoff.launchInstallerAfterExit('C:\\Updates\\ThuisHub-Setup-1.3.0.exe',4321,(command:string,args:string[],options:any)=>{call={command,args,options};return{unref:()=>{unref=true}}});
+    expect(call.command).toBe('powershell.exe');expect(call.options).toMatchObject({detached:true,windowsHide:true});expect(unref).toBe(true);
+    expect(result.script).toContain('Wait-Process -Id 4321');expect(result.script).toContain('ThuisHub-Setup-1.3.0.exe');
   });
 });

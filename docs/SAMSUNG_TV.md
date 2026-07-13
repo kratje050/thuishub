@@ -10,6 +10,6 @@
 4. Bouw met `.\scripts\build-samsung-tv.ps1`.
 5. Installeer de WGT via Tizen Studio/Device Manager op het gekoppelde testtoestel.
 
-Uitvoer, wanneer SDK en certificaat aanwezig zijn: `release\ThuisHub-Samsung-TV-1.2.1.wgt`. Zonder deze lokale vereisten stopt het script veilig en blijft de volledige bron beschikbaar. Samsung's officiële [Web App Guide](https://developer.samsung.com/smarttv/develop/tools/webapp/webapp-guide.html) beschrijft packaging en testen.
+Uitvoer, wanneer SDK en certificaat aanwezig zijn: `release\ThuisHub-Samsung-TV-1.2.2.wgt`. Zonder deze lokale vereisten stopt het script veilig en blijft de volledige bron beschikbaar. Samsung's officiële [Web App Guide](https://developer.samsung.com/smarttv/develop/tools/webapp/webapp-guide.html) beschrijft packaging en testen.
 
 Live TV/DVR gebruikt dezelfde serverroutes maar heeft in deze 1.2-testclient nog geen afzonderlijke native gids. Audio-/ondertitelgedrag en HDR10+ moeten per tv-model met echte media worden getest.

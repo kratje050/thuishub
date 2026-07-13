@@ -20,7 +20,7 @@ function release(version='1.3.0',overrides:Record<string,unknown>={}){
 }
 function responseJson(value:unknown,status=200){return new Response(JSON.stringify(value),{status,headers:{'content-type':'application/json'}})}
 
-beforeEach(()=>{database.setSetting('updateChannel','stable');database.setSetting('developmentUpdatesEnabled','false');updates.updateInternals.setDownloadInProgress(false)});
+beforeEach(()=>{database.setSetting('updateChannel','stable');database.setSetting('developmentUpdatesEnabled','false');database.setSetting('downloadedUpdateResult','{}');updates.updateInternals.setDownloadInProgress(false);fs.rmSync(appPaths.updatesDir,{recursive:true,force:true})});
 afterAll(()=>{database.db.close();fs.rmSync(root,{recursive:true,force:true})});
 
 describe('GitHub Releases-updatecontrole',()=>{
@@ -88,6 +88,25 @@ describe('beveiligde update-download',()=>{
   it('downloadt naar LocalAppData en controleert grootte en SHA-256',async()=>{
     const result=await updates.downloadUpdate(manifest,async()=>new Response(bytes));
     expect(result.sha256Verified).toBe(true);expect(result.installRequiresConsent).toBe(true);expect(path.dirname(result.file)).toBe(appPaths.updatesDir);expect(fs.readFileSync(result.file)).toEqual(bytes);
+  });
+
+  it('toont na downloaden Installeren en draagt een dubbel gecontroleerde installer over aan de desktop-app',async()=>{
+    database.setSetting('lastUpdateResult',JSON.stringify({...manifest,available:true}));
+    await updates.downloadUpdate(manifest,async()=>new Response(bytes));
+    expect(updates.downloadedUpdateStatus()).toMatchObject({ready:true,version:'1.3.0',sha256Verified:true});
+    const result=updates.requestUpdateInstall({desktop:true});
+    expect(result).toMatchObject({accepted:true,mode:'desktop',version:'1.3.0'});
+    const request=JSON.parse(fs.readFileSync(updates.updateInternals.installRequestFile,'utf8'));
+    expect(request).toMatchObject({version:'1.3.0',fileName:'ThuisHub-Setup-1.3.0.exe',bytes:bytes.length,sha256});
+  });
+
+  it('controleert de installer opnieuw en weigert een wijziging na de download',async()=>{
+    database.setSetting('lastUpdateResult',JSON.stringify({...manifest,available:true}));
+    const result=await updates.downloadUpdate(manifest,async()=>new Response(bytes));
+    fs.writeFileSync(result.file,'bestanD');
+    expect(updates.downloadedUpdateStatus().ready).toBe(true);
+    expect(()=>updates.requestUpdateInstall({desktop:true})).toThrow('gewijzigd of beschadigd');
+    expect(fs.existsSync(result.file)).toBe(false);
   });
 
   it('weigert een verkeerde hash en verwijdert tijdelijke bestanden',async()=>{

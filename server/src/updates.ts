@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn, type SpawnOptions } from 'node:child_process';
 import { APP_VERSION } from './constants.js';
 import { getSetting, setSetting } from './db.js';
 import { log } from './logger.js';
@@ -80,10 +81,63 @@ export async function downloadUpdate(manifest:UpdateManifest,fetcher:typeof fetc
     if(manifest.size&&bytes.length!==manifest.size)throw new Error('De downloadgrootte komt niet overeen met de GitHub-release.');
     const hash=crypto.createHash('sha256').update(bytes).digest('hex');if(hash.toLowerCase()!==manifest.sha256.toLowerCase())throw new Error('De integriteitscontrole van de update is mislukt. De huidige installatie blijft ongewijzigd.');
     if(manifest.githubDigest&&hash.toLowerCase()!==manifest.githubDigest.toLowerCase())throw new Error('De GitHub asset-digest is ongeldig.');
-    fs.renameSync(temporary,target);log('INFO','updater','GitHub-update gedownload; grootte en SHA-256 zijn gecontroleerd.',{version:manifest.version,file:target,bytes:bytes.length});
-    return{file:target,bytes:bytes.length,sha256:hash,sha256Verified:true,digitallySigned:false,installRequiresConsent:true};
+    fs.renameSync(temporary,target);setSetting('downloadedUpdateResult',JSON.stringify({version:manifest.version,fileName:name,bytes:bytes.length,sha256:hash,downloadedAt:new Date().toISOString()}));log('INFO','updater','GitHub-update gedownload; grootte en SHA-256 zijn gecontroleerd.',{version:manifest.version,file:target,bytes:bytes.length});
+    return{file:target,fileName:name,version:manifest.version,bytes:bytes.length,sha256:hash,sha256Verified:true,digitallySigned:false,installRequiresConsent:true};
   }catch(error){fs.rmSync(temporary,{force:true});fs.rmSync(target,{force:true});log('CRITICAL','updater','Updatebestand geweigerd; huidige installatie blijft actief.',{error:error instanceof Error?error.message:String(error)});throw error}
   finally{downloadInProgress=false}
 }
 
-export const updateInternals={compareVersions,selectRelease,manifestFromRelease,exactAsset,headers,GITHUB_API,setDownloadInProgress:(value:boolean)=>downloadInProgress=value};
+type DownloadedUpdateRecord={version:string;fileName:string;bytes:number;sha256:string;downloadedAt:string};
+type SpawnLike=(command:string,args?:readonly string[],options?:SpawnOptions)=>{unref():void};
+const installRequestFile=path.join(appPaths.updatesDir,'install-request.json');
+
+function storedJson<T>(key:string):Partial<T>{try{return JSON.parse(getSetting(key,'{}')||'{}')}catch{return{}}}
+
+export function downloadedUpdateStatus(){
+  const trusted=storedJson<UpdateManifest&{available:boolean}>('lastUpdateResult');
+  const downloaded=storedJson<DownloadedUpdateRecord>('downloadedUpdateResult');
+  const expectedName=trusted.version?`ThuisHub-Setup-${trusted.version}.exe`:'';
+  const target=expectedName?path.join(appPaths.updatesDir,expectedName):'';
+  const exists=Boolean(target&&fs.existsSync(target));
+  const bytes=exists?fs.statSync(target).size:0;
+  const ready=Boolean(trusted.available&&validVersion(String(trusted.version||''))&&downloaded.version===trusted.version&&downloaded.fileName===expectedName&&downloaded.sha256===trusted.sha256&&/^[a-f0-9]{64}$/i.test(String(downloaded.sha256||''))&&bytes===downloaded.bytes&&(!trusted.size||bytes===trusted.size));
+  return{ready,version:ready?downloaded.version:undefined,fileName:ready?downloaded.fileName:undefined,bytes:ready?bytes:undefined,downloadedAt:ready?downloaded.downloadedAt:undefined,sha256Verified:ready};
+}
+
+function verifiedDownloadedUpdate(){
+  const status=downloadedUpdateStatus();
+  if(!status.ready||!status.version||!status.fileName)throw Object.assign(new Error('Download de update eerst opnieuw en laat de SHA-256-controle voltooien.'),{status:409});
+  const trusted=storedJson<UpdateManifest&{available:boolean}>('lastUpdateResult');
+  const file=path.join(appPaths.updatesDir,status.fileName);
+  const hash=crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  if(hash.toLowerCase()!==String(trusted.sha256||'').toLowerCase()||trusted.githubDigest&&hash.toLowerCase()!==trusted.githubDigest.toLowerCase()){
+    fs.rmSync(file,{force:true});setSetting('downloadedUpdateResult','{}');
+    throw Object.assign(new Error('De gedownloade installer is gewijzigd of beschadigd en is verwijderd. Download de update opnieuw.'),{status:409});
+  }
+  return{version:status.version,fileName:status.fileName,file,bytes:status.bytes!,sha256:hash};
+}
+
+function launchInstallerAfterExit(installer:string,waitPid=process.pid,spawnProcess:SpawnLike=spawn as SpawnLike){
+  const escaped=installer.replaceAll("'","''");
+  const script=`$ErrorActionPreference = 'Stop'\r\nWait-Process -Id ${waitPid} -ErrorAction SilentlyContinue\r\nStart-Sleep -Milliseconds 500\r\nStart-Process -FilePath '${escaped}'\r\n`;
+  const encoded=Buffer.from(script,'utf16le').toString('base64');
+  const helper=spawnProcess('powershell.exe',['-NoProfile','-NonInteractive','-WindowStyle','Hidden','-EncodedCommand',encoded],{detached:true,stdio:'ignore',windowsHide:true});helper.unref();
+}
+
+export function requestUpdateInstall(options:{desktop?:boolean;spawnProcess?:SpawnLike;shutdown?:()=>void}={}){
+  if(process.platform!=='win32')throw Object.assign(new Error('Automatisch installeren wordt alleen op Windows ondersteund.'),{status:400});
+  const update=verifiedDownloadedUpdate();
+  const desktop=options.desktop??process.env.THUIS_HUB_DESKTOP==='true';
+  if(desktop){
+    fs.mkdirSync(appPaths.updatesDir,{recursive:true});const temporary=`${installRequestFile}.${crypto.randomBytes(5).toString('hex')}.tmp`;
+    fs.writeFileSync(temporary,JSON.stringify({...update,requestedAt:new Date().toISOString()}));fs.renameSync(temporary,installRequestFile);
+    log('INFO','updater','Installatieverzoek veilig overgedragen aan de Windows-app.',{version:update.version,fileName:update.fileName});
+    return{accepted:true,mode:'desktop',version:update.version,message:'ThuisHub wordt afgesloten. Daarna opent de gecontroleerde installer automatisch.'};
+  }
+  launchInstallerAfterExit(update.file,process.pid,options.spawnProcess);
+  (options.shutdown||(()=>{const timer=setTimeout(()=>process.kill(process.pid,'SIGTERM'),1200);timer.unref()}))();
+  log('INFO','updater','Installer gepland na het afsluiten van de browser-server.',{version:update.version,fileName:update.fileName});
+  return{accepted:true,mode:'browser',version:update.version,message:'De server sluit af. Daarna opent de gecontroleerde installer automatisch.'};
+}
+
+export const updateInternals={compareVersions,selectRelease,manifestFromRelease,exactAsset,headers,GITHUB_API,installRequestFile,verifiedDownloadedUpdate,launchInstallerAfterExit,setDownloadInProgress:(value:boolean)=>downloadInProgress=value};

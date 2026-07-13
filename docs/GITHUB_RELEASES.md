@@ -10,7 +10,7 @@ Een officiële release bevat exact:
 - `SHA256SUMS.txt`, `latest.json`, `RELEASE_NOTES.md`
 - optioneel `ThuisHub-Samsung-TV-<versie>.wgt`
 
-De updater selecteert nooit het eerste willekeurige EXE-bestand. Downloads gaan via een willekeurig `.part`-bestand naar `%LOCALAPPDATA%\ThuisHub\updates`, waarna grootte, SHA-256 en eventueel de GitHub digest worden vergeleken. Beschadigde bestanden worden verwijderd. Installatie/portable-vervanging gebeurt in 1.2 bewust niet automatisch; de gecontroleerde installer wordt alleen na gebruikersactie uitgevoerd.
+De updater selecteert nooit het eerste willekeurige EXE-bestand. Downloads gaan via een willekeurig `.part`-bestand naar `%LOCALAPPDATA%\ThuisHub\updates`, waarna grootte, SHA-256 en eventueel de GitHub digest worden vergeleken. Beschadigde bestanden worden verwijderd. Na **Installeren en herstarten** wordt de installer nogmaals gecontroleerd, sluit ThuisHub netjes af en opent de Windows-installer pas nadat het oude proces verdwenen is.
 
 ## Eerste release voorbereiden
 
@@ -18,9 +18,9 @@ De updater selecteert nooit het eerste willekeurige EXE-bestand. Downloads gaan 
 npm run check
 npm run dist:win
 .\scripts\build-android-tv.ps1
-.\scripts\generate-release-metadata.ps1 -Version 1.2.1
+.\scripts\generate-release-metadata.ps1 -Version 1.2.2
 .\scripts\scan-release-secrets.ps1 -IncludeReleaseArtifacts
-.\scripts\publish-github-release.ps1 -Version 1.2.1
+.\scripts\publish-github-release.ps1 -Version 1.2.2
 ```
 
 Het laatste commando controleert `gh auth status`, maakt hashes/manifest opnieuw, scant, maakt zo nodig een lokale tag en creëert standaard alleen een **draft** in `kratje050/thuishub`. Gebruik `-Publish` uitsluitend wanneer u na inspectie interactief exact `PUBLICEREN` wilt typen. Het script pusht geen broncode.

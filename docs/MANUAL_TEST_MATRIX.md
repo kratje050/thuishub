@@ -1,4 +1,4 @@
-# Handmatige testmatrix 1.2.1
+# Handmatige testmatrix 1.2.2
 
 Automatische tests bewijzen beslislogica en updatebeveiliging, maar niet de fysieke HDMI/display/audio-uitvoer. Noteer per combinatie resultaat, mediafixture, apparaatfirmware en waargenomen tv/receiver-info.
 

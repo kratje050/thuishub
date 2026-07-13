@@ -1,8 +1,10 @@
 const { app, BrowserWindow, Menu, Tray, dialog, nativeImage, shell } = require('electron');
 const TRAY_LABELS = require('./tray-labels.cjs');
+const { consumeInstallRequest, launchInstallerAfterExit } = require('./update-handoff.cjs');
 const http = require('node:http');
 const net = require('node:net');
 const fs = require('node:fs');
+const os = require('node:os');
 const { execFileSync, spawn } = require('node:child_process');
 const path = require('node:path');
 
@@ -15,8 +17,11 @@ let mainWindow;
 let tray;
 let quitting = false;
 let serverProcess;
+let updateRequestTimer;
 
 const appRoot = path.join(process.env.APPDATA || app.getPath('userData'), APP_NAME);
+const updatesDir = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), APP_NAME, 'updates');
+const updateRequestFile = path.join(updatesDir, 'install-request.json');
 const logFile = path.join(appRoot, 'logs', 'application.log');
 function log(message) {
   try {
@@ -90,6 +95,7 @@ async function ensureServer() {
     THUIS_HUB_ROOT_DIR: appRoot,
     THUIS_HUB_DATA_DIR: path.join(appRoot, 'data'),
     THUIS_HUB_WEB_DIR: path.join(app.getAppPath(), 'dist'),
+    THUIS_HUB_DESKTOP: 'true',
   };
   const serverEntry = path.join(app.getAppPath(), 'server', 'dist', 'index.js');
   const nodeExecutable = app.isPackaged
@@ -112,6 +118,27 @@ async function ensureServer() {
     await new Promise((resolve) => setTimeout(resolve, 125));
   }
   throw new Error('De ThuisHub-server reageerde niet op tijd.');
+}
+
+function watchForUpdateInstall() {
+  if (updateRequestTimer) return;
+  updateRequestTimer = setInterval(() => {
+    if (quitting) return;
+    try {
+      const update = consumeInstallRequest(updateRequestFile, updatesDir);
+      if (!update) return;
+      log(`Gecontroleerde installer overgenomen voor versie ${update.version}`);
+      clearInterval(updateRequestTimer);
+      updateRequestTimer = undefined;
+      launchInstallerAfterExit(update.file, process.pid);
+      quitting = true;
+      app.quit();
+    } catch (error) {
+      log(`Installatieverzoek geweigerd: ${error?.stack || error}`);
+      dialog.showErrorBox('Update kon niet worden gestart', error instanceof Error ? error.message : String(error));
+    }
+  }, 750);
+  updateRequestTimer.unref?.();
 }
 
 function isInternalUrl(rawUrl) {
@@ -203,6 +230,7 @@ if (hasLock) {
       log('Server is gereed; venster maken');
       createWindow();
       createTray();
+      watchForUpdateInstall();
     } catch (error) {
       log(`Startfout: ${error?.stack || error}`);
       dialog.showErrorBox('ThuisHub kon niet starten', error instanceof Error ? error.message : String(error));
@@ -214,6 +242,7 @@ if (hasLock) {
   app.on('activate', showWindow);
   app.on('before-quit', () => {
     quitting = true;
+    if (updateRequestTimer) clearInterval(updateRequestTimer);
     if (serverProcess && !serverProcess.killed) serverProcess.kill('SIGTERM');
   });
   app.on('window-all-closed', () => {});
