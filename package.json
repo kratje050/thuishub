@@ -1,0 +1,112 @@
+{
+  "name": "thuishub-media",
+  "version": "1.1.0",
+  "private": true,
+  "description": "ThuisHub: je veilige lokale mediaserver voor Windows en browser",
+  "main": "desktop/main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c cyan,magenta \"tsx watch server/src/index.ts\" \"vite --host 0.0.0.0\"",
+    "build": "vite build && tsc -p server/tsconfig.json",
+    "start": "node server/dist/index.js",
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json && vitest run",
+    "icon": "node scripts/create-icon.mjs",
+    "runtime": "node scripts/prepare-runtime.mjs",
+    "desktop": "npm run build && npm run icon && electron .",
+    "dist:win": "npm run build && npm run icon && npm run runtime && node scripts/build-windows.mjs"
+  },
+  "dependencies": {
+    "adm-zip": "^0.6.0",
+    "bcryptjs": "^3.0.2",
+    "better-sqlite3": "^12.11.1",
+    "express": "^5.1.0",
+    "fast-xml-parser": "^5.10.0",
+    "ffmpeg-static": "^5.3.0",
+    "ffprobe-static": "^3.1.0",
+    "hls.js": "^1.6.13",
+    "mime-types": "^3.0.1",
+    "music-metadata": "^11.13.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.3",
+    "@types/mime-types": "^3.0.1",
+    "@types/node": "^24.3.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "concurrently": "^9.2.1",
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3",
+    "png-to-ico": "^3.0.2",
+    "supertest": "^7.1.4",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.4",
+    "vitest": "^3.2.4"
+  },
+  "build": {
+    "appId": "nl.huiskamer.media",
+    "productName": "ThuisHub",
+    "asar": false,
+    "npmRebuild": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "server/dist/**/*",
+      "desktop/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist",
+        "to": "web"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      },
+      {
+        "from": "build/runtime/node.exe",
+        "to": "runtime/node.exe"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ThuisHub",
+      "artifactName": "ThuisHub-Setup-${version}.${ext}",
+      "include": "build/installer.nsh",
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "ThuisHub-Portable-${version}.${ext}"
+    }
+  }
+}

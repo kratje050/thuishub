@@ -1,0 +1,2 @@
+.auth-logo{display:block;width:min(340px,90%);height:110px;object-fit:contain;object-position:left;margin-bottom:24px}.splash-logo{width:140px;height:140px;object-fit:contain;filter:drop-shadow(0 18px 45px #008fea55)}.sidebar-logo{width:39px;height:39px;border-radius:10px;object-fit:cover;flex:0 0 auto}.mobile-brand .sidebar-logo{width:40px;height:40px}.brand{min-width:0}.brand>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.auth-card{overflow:hidden}
+@media(max-width:640px){.auth-logo{height:88px}.sidebar-logo{border-radius:9px}}
