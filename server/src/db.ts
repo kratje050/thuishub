@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { APP_VERSION } from './constants.js';
 import { log } from './logger.js';
 import { appPaths, applyPendingRestore, migrateLegacyData } from './paths.js';
+import { migrateLegacyTrustedDeviceOwners } from './device-owner-migration.js';
 
 export type User = { id: number; username: string; role: 'admin' | 'user'; maxContentRating?: string; canDownload?: boolean };
 
@@ -264,6 +265,17 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
   CREATE INDEX IF NOT EXISTS device_commands_pending_idx ON device_commands(device_id,acknowledged_at,id);
+  CREATE TABLE IF NOT EXISTS playback_device_identities (
+    device_id TEXT NOT NULL REFERENCES playback_devices(id) ON DELETE CASCADE,
+    protocol TEXT NOT NULL,
+    protocol_id TEXT NOT NULL,
+    address TEXT,
+    port INTEGER,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(protocol, protocol_id)
+  );
+  CREATE INDEX IF NOT EXISTS playback_device_identity_device_idx ON playback_device_identities(device_id);
   CREATE TABLE IF NOT EXISTS metadata_external_ids (
     media_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
     provider TEXT NOT NULL,
@@ -446,6 +458,29 @@ ensureColumn('media_items', 'atmos', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('media_items', 'dts_x', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('media_items', 'subtitle_format', "TEXT NOT NULL DEFAULT 'none'");
 ensureColumn('playback_devices', 'user_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
+ensureColumn('playback_devices', 'protocol', "TEXT NOT NULL DEFAULT 'thuishub-tv-app'");
+ensureColumn('playback_devices', 'device_type', "TEXT NOT NULL DEFAULT 'television'");
+ensureColumn('playback_devices', 'address', 'TEXT');
+ensureColumn('playback_devices', 'port', 'INTEGER');
+ensureColumn('playback_devices', 'online_state', "TEXT NOT NULL DEFAULT 'offline'");
+ensureColumn('playback_devices', 'protocol_id', 'TEXT');
+ensureColumn('playback_devices', 'physical_key', 'TEXT');
+ensureColumn('playback_devices', 'requires_pairing', 'INTEGER NOT NULL DEFAULT 1');
+ensureColumn('playback_devices', 'icon', "TEXT NOT NULL DEFAULT 'tv'");
+ensureColumn('playback_devices', 'discovery_data', "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn('device_sessions', 'scopes', "TEXT NOT NULL DEFAULT '[\"playback:read\",\"playback:control\",\"progress:write\",\"tracks:write\",\"quality:write\"]'");
+ensureColumn('device_sessions', 'last_used_at', 'TEXT');
+ensureColumn('device_sessions', 'revoked_at', 'TEXT');
+ensureColumn('device_sessions', 'token_version', 'INTEGER NOT NULL DEFAULT 1');
+ensureColumn('device_commands', 'playback_session_id', 'TEXT');
+ensureColumn('device_commands', 'sequence', 'INTEGER');
+ensureColumn('device_commands', 'expires_at', 'INTEGER');
+db.exec(`UPDATE playback_devices SET protocol='thuishub-tv-app',requires_pairing=1,
+  online_state=CASE WHEN last_seen_at >= datetime('now','-90 seconds') THEN 'online'
+  WHEN last_seen_at >= datetime('now','-10 minutes') THEN 'possibly-offline' ELSE 'offline' END
+  WHERE protocol IS NULL OR protocol=''`);
+const deviceOwnerMigration = migrateLegacyTrustedDeviceOwners(db);
+if (deviceOwnerMigration.assigned > 0) log('INFO', 'migration', 'Oude vertrouwde tv-apps zijn aan de lokale beheerder gekoppeld.', deviceOwnerMigration);
 
 export function getSetting(key: string, fallback = ''): string {
   return (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? fallback;
@@ -484,6 +519,9 @@ export function publicSettings() {
     ,localStreamingEnabled: getSetting('localStreamingEnabled', 'false') === 'true'
     ,localStreamingAddress: getSetting('localStreamingAddress', '')
     ,localStreamingPort: Number(getSetting('localStreamingPort', '8788'))
+    ,automaticDeviceDiscovery: getSetting('automaticDeviceDiscovery', 'true') === 'true'
+    ,dlnaDiscoveryEnabled: getSetting('dlnaDiscoveryEnabled', 'true') === 'true'
+    ,deviceRetentionDays: Number(getSetting('deviceRetentionDays', '30'))
     ,castReceiverAppId: getSetting('castReceiverAppId', '')
     ,defaultQualityLan: getSetting('defaultQualityLan', 'original')
     ,defaultQualityTailscale: getSetting('defaultQualityTailscale', 'auto')

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="https://thuishub.invalid/tv" version="1.2.2" viewmodes="maximized">
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="https://thuishub.invalid/tv" version="1.2.3" viewmodes="maximized">
   <tizen:application id="Thuishub.TV" package="Thuishub" required_version="5.0"/>
   <content src="index.html"/><name>ThuisHub</name><icon src="icon.png"/>
   <feature name="http://tizen.org/feature/screen.size.all"/>
-  <tizen:privilege name="http://tizen.org/privilege/internet"/><tizen:privilege name="http://developer.samsung.com/privilege/productinfo"/><tizen:privilege name="http://developer.samsung.com/privilege/avplay"/>
+  <tizen:privilege name="http://tizen.org/privilege/internet"/><tizen:privilege name="http://tizen.org/privilege/network.get"/><tizen:privilege name="http://developer.samsung.com/privilege/productinfo"/><tizen:privilege name="http://developer.samsung.com/privilege/avplay"/>
   <access origin="*" subdomains="true"/><tizen:profile name="tv-samsung"/><tizen:setting screen-orientation="landscape" context-menu="disable" background-support="disable" encryption="disable" install-location="auto" hwkey-event="enable"/>
 </widget>

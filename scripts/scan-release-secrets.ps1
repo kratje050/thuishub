@@ -32,7 +32,10 @@ function Find-PrivateLiteralInBinary([string]$Path, [string[]]$Needles) {
 
 Push-Location $root
 try {
-  $forbidden = git ls-files | Where-Object { $_ -match '(^|/)(data|backups|logs|exports|release|temp|tmp)/|\.(db|sqlite3?|pfx|p12|pem|key|keystore|jks|m3u8?|xmltv|log|dmp|backup)$|(^|/)(\.env($|\.)|credentials\.|secrets\.|config\.local\.|settings\.local\.)' }
+  $forbidden = git ls-files | Where-Object {
+    $_ -match '(^|/)(data|backups|logs|exports|release|temp|tmp)/|\.(db|sqlite3?|pfx|p12|pem|key|keystore|jks|m3u8?|xmltv|log|dmp|backup)$|(^|/)(\.env($|\.)|credentials\.|secrets\.|config\.local\.|settings\.local\.)' -and
+    $_ -notmatch '(^|/)\.env\.(example|sample|template)$'
+  }
   if ($forbidden) { throw "Gevoelige of gegenereerde bestanden worden door Git gevolgd:`n$($forbidden -join "`n")" }
 
   $gitleaks = Get-Command gitleaks -ErrorAction SilentlyContinue

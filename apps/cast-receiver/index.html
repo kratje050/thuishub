@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>ThuisHub Cast Receiver</title>
+  <link rel="stylesheet" href="receiver.css">
+  <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+</head>
+<body>
+  <cast-media-player id="cast-player"></cast-media-player>
+  <div id="artwork" class="artwork" aria-hidden="true"></div>
+  <main class="receiver-ui">
+    <header class="brand"><img src="/brand/thuishub-logo.png" alt="ThuisHub"><span>Je eigen mediabibliotheek</span></header>
+    <section class="now-playing">
+      <img id="poster" class="poster" alt="">
+      <div class="details">
+        <p id="state" class="eyebrow">KLAAR OM AF TE SPELEN</p>
+        <h1 id="title">ThuisHub</h1>
+        <h2 id="subtitle">Kies media op je telefoon of computer</h2>
+        <div id="badges" class="badges"></div>
+        <div class="timeline"><span id="elapsed">0:00</span><div class="track"><i id="progress"></i></div><span id="duration">0:00</span></div>
+        <div class="session-info"><span id="tracks">Geen tracks geladen</span><span id="queue">Wachtrij leeg</span></div>
+      </div>
+    </section>
+    <aside id="error" class="error" hidden><strong>Afspelen is mislukt</strong><span id="error-message"></span></aside>
+  </main>
+  <script src="receiver.js"></script>
+</body>
+</html>

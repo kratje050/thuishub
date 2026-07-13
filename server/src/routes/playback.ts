@@ -14,18 +14,26 @@ function cors(req: Request, res: Response) {
   let allowed = !origin;
   try {
     const parsed = new URL(origin);
-    allowed = parsed.hostname === req.hostname || parsed.hostname.endsWith('.googleusercontent.com') || configured.includes(origin);
+    const localAddress = String(req.socket.localAddress || '').replace(/^::ffff:/, '');
+    const localHosts = new Set(['localhost','127.0.0.1','::1',localAddress,getSetting('localStreamingAddress','')].filter(Boolean));
+    allowed = localHosts.has(parsed.hostname) || parsed.hostname.endsWith('.googleusercontent.com') || origin === 'https://www.gstatic.com' || configured.includes(origin);
   } catch {}
   if (origin && allowed) { res.setHeader('Access-Control-Allow-Origin', origin); res.setHeader('Vary', 'Origin'); }
   res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept-Encoding,Range');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept-Encoding,Range,If-Range');
   res.setHeader('Access-Control-Expose-Headers', 'Content-Length,Content-Range,Accept-Ranges,Content-Type');
+  if (allowed && String(req.headers['access-control-request-private-network'] || '').toLowerCase() === 'true') res.setHeader('Access-Control-Allow-Private-Network', 'true');
+  res.setHeader('Cache-Control', 'private,no-store');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   return allowed;
 }
 
-playbackRouter.options('/:id/*resource', (req, res) => cors(req, res) ? res.status(204).end() : res.status(403).end());
+playbackRouter.options('/:id/*resource', (req, res) => cors(req, res) ? res.status(204).setHeader('Content-Length', '0').end() : res.status(403).end());
 
-function grant(req: Request, resource: 'file' | 'hls' | 'subtitle' | 'download') {
+function grant(req: Request, resource: 'file' | 'hls' | 'subtitle' | 'download' | 'artwork') {
   return verifyPlaybackToken(String(req.query.token || ''), Number(req.params.id), resource);
 }
 
@@ -77,8 +85,20 @@ playbackRouter.all('/:id/subtitle', (req, res) => {
   let text = fs.readFileSync(item.subtitle_path, 'utf8').replace(/^\uFEFF/, '');
   if (path.extname(item.subtitle_path).toLowerCase() === '.srt') text = `WEBVTT\n\n${text.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')}`;
   res.type('text/vtt; charset=utf-8');
+  res.setHeader('Content-Length', String(Buffer.byteLength(text)));
   if (req.method === 'HEAD') return res.end();
   res.send(text);
+});
+
+playbackRouter.all('/:id/artwork', (req, res) => {
+  if (!['GET', 'HEAD'].includes(req.method)) return res.status(405).end();
+  if (!cors(req, res)) return res.status(403).end();
+  if (!grant(req, 'artwork')) return res.status(401).json({ error: 'De tijdelijke afbeeldingslink is ongeldig of verlopen.' });
+  const item = db.prepare(`SELECT COALESCE((SELECT local_path FROM metadata_images
+    WHERE media_id=m.id AND image_type='poster' AND selected=1 AND local_path IS NOT NULL ORDER BY id DESC LIMIT 1),m.poster_path) file
+    FROM media_items m WHERE m.id=?`).get(Number(req.params.id)) as { file?: string } | undefined;
+  if (!item?.file || !path.isAbsolute(item.file) || !fs.existsSync(item.file)) return res.status(404).end();
+  serveRange(req, res, item.file);
 });
 
 playbackRouter.all('/:id/hls/:file', async (req, res, next) => {
@@ -97,12 +117,11 @@ playbackRouter.all('/:id/hls/:file', async (req, res, next) => {
       const token = encodeURIComponent(String(req.query.token));
       const manifest = fs.readFileSync(file, 'utf8').split(/\r?\n/).map(line => line && !line.startsWith('#') ? `${line}?token=${token}` : line).join('\n');
       res.type('application/vnd.apple.mpegurl').setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Length', String(Buffer.byteLength(manifest)));
       if (req.method === 'HEAD') return res.end();
       return res.send(manifest);
     }
-    res.setHeader('Cache-Control', 'private,max-age=3600');
-    if (req.method === 'HEAD') { res.type('video/mp2t'); return res.end(); }
-    res.sendFile(file);
+    return serveRange(req, res, file);
   } catch (error) { next(error); }
 });
 

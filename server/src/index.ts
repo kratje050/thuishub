@@ -14,11 +14,47 @@ import { getSetting, markCleanShutdown } from './db.js';
 import { log, setMaxLogStorageMb } from './logger.js';
 import { checkForUpdates } from './updates.js';
 import { playbackRouter } from './routes/playback.js';
-import { restrictLanListener, startLanStreamingServer } from './network.js';
+import { assignedPrivateAddresses, restrictLanListener, startLanStreamingServer } from './network.js';
+import { discoverPlaybackDevices, registerPlaybackDiscoveryProvider, startPlaybackDeviceDiscovery, stopPlaybackDeviceDiscovery } from './playback-devices/discovery-service.js';
+import { createDlnaDiscoveryProvider, DlnaSsdpMonitor } from './playback-devices/providers/dlna.js';
+import { startThuisHubMdnsAdvertisement, stopThuisHubMdnsAdvertisement } from './playback-devices/mdns-advertiser.js';
+import { attachPlaybackWebSockets, closePlaybackWebSockets } from './playback-devices/websocket.js';
+import { httpErrorPayload, httpErrorStatus } from './http-errors.js';
 
 const app = express();
 const port = Number(process.env.PORT || APP_PORT);
 const host = process.env.HOST || '127.0.0.1';
+let dlnaMonitor: DlnaSsdpMonitor | null = null;
+
+async function rebindLanDiscoveryServices(address: string) {
+  await stopThuisHubMdnsAdvertisement();
+  await dlnaMonitor?.stop();
+  dlnaMonitor = null;
+  if (getSetting('automaticDeviceDiscovery', 'true') !== 'true' || !assignedPrivateAddresses().includes(address)) return;
+  startThuisHubMdnsAdvertisement();
+  if (getSetting('dlnaDiscoveryEnabled', 'true') !== 'true') return;
+  const monitor = new DlnaSsdpMonitor({
+    address,
+    onAlive: () => { void discoverPlaybackDevices('background'); },
+    onByebye: () => { void discoverPlaybackDevices('background'); },
+    onError: error => log('WARNING', 'tv-discovery', 'SSDP NOTIFY kon niet worden verwerkt.', { error: error.message }),
+  });
+  dlnaMonitor = monitor;
+  try { await monitor.start(); }
+  catch (error) {
+    if (dlnaMonitor === monitor) dlnaMonitor = null;
+    await monitor.stop();
+    throw error;
+  }
+}
+
+registerPlaybackDiscoveryProvider({
+  ...createDlnaDiscoveryProvider(),
+  async discover(address) {
+    if (getSetting('dlnaDiscoveryEnabled', 'true') !== 'true') return { provider: 'dlna-upnp', devices: [], startedAt: new Date().toISOString(), finishedAt: new Date().toISOString() };
+    return createDlnaDiscoveryProvider().discover(address);
+  },
+});
 
 app.disable('x-powered-by');
 app.use(restrictLanListener);
@@ -41,23 +77,38 @@ if (fs.existsSync(webDir)) {
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);
   log('ERROR', 'server', err.message || 'Onbekende serverfout.', { stack: err.stack, path: _req.path, method: _req.method });
-  res.status(err.status || 500).json({ error: err.message || 'Er ging iets mis.' });
+  res.status(httpErrorStatus(err)).json(httpErrorPayload(err));
 });
 
 const server = app.listen(port, host, () => {
   startDvrScheduler();
   startBackupScheduler();
+  startPlaybackDeviceDiscovery(async ({ address }) => {
+    await rebindLanDiscoveryServices(address);
+  });
   void migrateLegacyTmdbMetadata().catch(error => console.error('Metadata-migratie mislukt:',error instanceof Error?error.message:String(error))).finally(()=>startMetadataQueueWorker());
   console.log(`\n${APP_NAME} ${APP_VERSION} draait op http://localhost:${port}\n`);
   log('INFO', 'server', 'Server gestart.', { host, port });
   if (getSetting('automaticUpdateCheck', 'false') === 'true') void checkForUpdates();
 });
 const lanServer = startLanStreamingServer(app);
+attachPlaybackWebSockets(server, { lan: false });
+if (lanServer) {
+  attachPlaybackWebSockets(lanServer, { lan: true });
+  lanServer.on('listening', () => startThuisHubMdnsAdvertisement());
+  lanServer.on('error', () => { void stopThuisHubMdnsAdvertisement(); });
+  lanServer.on('close', () => { void stopThuisHubMdnsAdvertisement(); });
+}
 
 function shutdown() {
   markCleanShutdown();
   log('INFO', 'server', 'Server wordt netjes afgesloten.');
   clearTranscodes();
+  void stopThuisHubMdnsAdvertisement();
+  void dlnaMonitor?.stop();
+  dlnaMonitor = null;
+  void stopPlaybackDeviceDiscovery();
+  closePlaybackWebSockets();
   server.close(() => process.exit(0));
   lanServer?.close();
 }

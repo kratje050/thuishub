@@ -12,10 +12,10 @@ De speler toont de methode, de oorspronkelijke en uitgaande eigenschappen en all
 
 ## Koppelen
 
-Een tv vraagt een willekeurige zescijferige code en een niet-getoonde pairing secret aan. Alleen een beheerder kan de code binnen tien minuten goedkeuren. Daarna ontvangt de tv één intrekbaar device-token; dit is geen gebruikers- of beheerderstoken. Kies **Apparaat vergeten** om alle sessies in te trekken.
+Een eigen tv-app vindt de server normaal automatisch en vraagt een willekeurige zescijferige code plus een niet-getoonde pairing secret aan. Alleen een beheerder kan de code binnen tien minuten goedkeuren. Daarna ontvangt de tv één intrekbaar device-token; dit is geen gebruikers- of beheerderstoken. Kies **Apparaat vergeten** om het token en actieve sessies in te trekken.
 
 ## Afstandsbediening
 
-Google Cast ondersteunt play/pause, stoppen, ±30 seconden, volume en verbreken vanuit de web/PWA-interface. Android TV en Tizen pollen de beveiligde commandowachtrij voor play, pause, stop, seek, volume, load en disconnect. De server ondersteunt daarnaast volgende/vorige, audio-, ondertitel- en kwaliteitsopdrachten als uitbreidingspunt.
+Google Cast ondersteunt play/pause, stoppen, zoeken, volume en verbreken vanuit de web/PWA-interface. De Tizen-app gebruikt een lokale WebSocket met pollingfallback; Android TV gebruikt de beperkte commandowachtrij. Beide verwerken `load`, play, pause, stop, seek en disconnect; Android TV kan daarnaast appvolume instellen.
 
-De tv haalt media rechtstreeks bij de LAN-streaminglistener op; er wordt geen schermspiegeling gebruikt.
+Volgende/vorige, tracks en kwaliteit blijven capability-afhankelijk en zijn in de afstandsbediening uitgeschakeld als de gekozen receiver ze niet implementeert. De tv haalt media rechtstreeks bij de beperkte LAN-streaminglistener op; er wordt geen schermspiegeling gebruikt.

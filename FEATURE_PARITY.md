@@ -1,22 +1,27 @@
-# ThuisHub functiepariteit 1.2.2
+# ThuisHub functiepariteit 1.2.3
+
+Deze tabel beschrijft de huidige lokale ontwikkelcode. De automatische tv-detectie is nog niet als nieuwe versie gepubliceerd.
 
 | Onderdeel | Status | Opmerking |
 |---|---|---|
-| Windows-app, browser en PWA | Beschikbaar | Zelfde lokale server en database. |
-| Films, series, muziek, foto's, Live TV en DVR | Beschikbaar | Bestaande 1.1-functies behouden. |
-| Direct Play / Direct Stream / Transcode | Beschikbaar | Eén centrale beslisengine; FFmpeg voor remux/transcode. |
-| HDR10, HDR10+, HLG, Dolby Vision-detectie | Beschikbaar | Behoud bij stream-copy; geldige fallback of SDR-tone-map. |
-| Atmos, TrueHD, E-AC-3, DTS-passthroughbeslissing | Beschikbaar | Alleen wanneer capabilityketen dit toestaat. |
-| Google Cast | Beschikbaar, hardwaretest vereist | Standaardreceiver direct; eigen receiver vereist geregistreerd App ID/HTTPS. |
-| Android TV / Google TV | Test-APK beschikbaar | Koppelen, bibliotheek, afspelen, MediaSession, tracks, voortgang en remote-opdrachten. Uitgebreide native zoek/Live TV-schermen zijn nog vervolgwerk. |
-| Samsung Tizen | Bron beschikbaar | WGT vereist lokale Tizen SDK en Samsung-certificaat; hardwaretest vereist. |
-| DLNA/UPnP-afspelen | Niet ingebouwd | Er wordt bewust geen UPnP-portforwarding gebruikt. Externe DLNA-speler kan signed HTTP-bronnen niet automatisch ontdekken. |
-| Apple TV-client | Uitbreidingspunt | Nog geen tvOS-client. Browser/AirPlay-schermspiegeling is geen primaire afspeelmethode. |
-| Multi-variant adaptive bitrate | Beperkt | HLS-profiel wordt centraal gekozen; wisselen van kwaliteit start een passend profiel. Geen gelijktijdige masterplaylist met alle varianten. |
-| GitHub Releases-updates | Beschikbaar | Download/controle wel; installatie blijft bewust handmatig en vereist toestemming. |
-| Serie- en afleveringsmetadata | Beschikbaar | TVmaze, lokale NFO, embedded tags en handmatige correctie; bronvermelding inbegrepen. |
-| Filmmetadata | Beschikbaar, OMDb optioneel | Zonder key blijven NFO, embedded, bestaande en handmatige metadata werken. |
-| Metadata-editor en artwork | Beschikbaar | Veldlocks, provenance, historie/herstel en veilige lokale/HTTPS-afbeeldingen. |
-| Provider-onafhankelijke database | Beschikbaar | Externe IDs, credits, ratings, afbeeldingen en veldstatus staan los van één provider. |
+| Windows-app, browser en PWA | Beschikbaar | Dezelfde lokale server en database; de browserfunctie blijft behouden. |
+| Films, series, muziek, foto's, Live TV en DVR | Beschikbaar | Bestaande bibliotheken, gebruikers en kijkvoortgang blijven behouden. |
+| Direct Play / Direct Stream / Transcode | Beschikbaar | Eén centrale beslisengine; FFmpeg verzorgt remux en transcode. |
+| HDR10, HDR10+, HLG en Dolby Vision-detectie | Beschikbaar | Alleen direct wanneer het gekozen apparaat dit meldt; anders veilige fallback of SDR-tone-map. |
+| Atmos, TrueHD, E-AC-3 en DTS-beslissing | Beschikbaar | Geen brede apparaataannames; passthrough alleen wanneer het capabilityprofiel dit toestaat. |
+| Centrale apparaatkiezer | Beschikbaar in ontwikkelcode | Permanente knop, gegroepeerde lijst, online-status, opnieuw zoeken, overplaatsen en verbreken. IP-adressen worden niet in de gewone kiezer getoond. |
+| Google Cast | Beschikbaar via officiële Web Sender SDK | Gebruikt de officiële Google-kiezer en standaard Default Media Receiver. Een custom receiver-App-ID staat alleen bij ontwikkelaarsopties. Echte hardwaretest blijft vereist. |
+| Automatische DLNA/UPnP-detectie | Beschikbaar | Zoekt uitsluitend lokale MediaRenderers en ondersteunt SetURI, Play, Pause, Stop, Seek, positie/status en optioneel volume. Geen router-UPnP of portforwarding. |
+| Android TV / Google TV | Test-app beschikbaar | Vindt `_thuishub._tcp.local`, koppelt met zes cijfers, gebruikt centrale sessielinks en Media3/ExoPlayer. APK/hardware-eindtest blijft vereist. |
+| Samsung Tizen | Appbron beschikbaar | DNS-SD waar de firmware dit ondersteunt, lokale pairing, AVPlay en WebSocket met pollingfallback. WGT en hardwaretest vereisen Tizen Studio en een certificaat. |
+| Centrale afspeelsessies | Beschikbaar | Eén server-side bron van waarheid met revisiebeveiliging, voortgang, hervatten, verplaatsen en onmiddellijke grant-intrekking bij stoppen. |
+| Tijdelijke tv-playbacklinks | Beschikbaar | Media-, ondertitel- en artworkgrants zijn media-, apparaat- en sessiegebonden, kort geldig en glijdend verlengbaar zolang de sessie actief is. |
+| Afstandsbediening | Beschikbaar per capability | Play/pause, stop, seek, volume en verbreken waar ondersteund. Volgende/vorige en kwaliteit starten gecontroleerd een nieuwe sessie; externe Cast-ondertiteling is selecteerbaar. Audiotrackkeuze en externe ondertitels in de Android/Tizen-testapps zijn nog niet aangesloten. |
+| Netwerk- en firewallbeveiliging | Beschikbaar | De beheerinterface blijft op localhost; de tv-listener bindt aan één RFC1918-adres en heeft een exacte route-allowlist. Scripts beperken regels tot profiel Privé en `LocalSubnet`. |
+| Diagnostiek | Beschikbaar | Dashboard en alleen-lezen PowerShell-script controleren listener, interface, profiel, firewall, mDNS, SSDP en MediaRenderers zonder tokens te tonen. |
+| GitHub Releases-updates | Beschikbaar | De bestaande gecontroleerde download- en installerhandoff blijft behouden; deze wijziging is nog niet gepubliceerd. |
+| Metadata zonder TMDB | Beschikbaar | TVmaze, OMDb optioneel, lokale NFO, embedded tags en handmatige correctie met bronvermelding. |
 
-ThuisHub bevat geen Plex-code of -merken en ontgrendelt geen betaalde diensten. Internet-tv, huurfilms en partnercontent vereisen eigen legale bronnen en rechten.
+Niet ieder Plex-onderdeel is één-op-één aanwezig. ThuisHub bevat geen Plex-code of -merken en ontgrendelt geen betaalde diensten. Internet-tv, huurfilms en partnercontent vereisen eigen legale bronnen en rechten.
+
+Zie voor de gedetailleerde tv-status [docs/FEATURE_PARITY.md](docs/FEATURE_PARITY.md) en voor vrijgave [docs/MANUAL_TEST_MATRIX.md](docs/MANUAL_TEST_MATRIX.md).

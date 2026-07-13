@@ -4,7 +4,7 @@ import { APP_NAME, APP_VERSION } from './constants.js';
 import { appPaths } from './paths.js';
 
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
-export type LogCategory = 'server' | 'application' | 'database' | 'updater' | 'transcoding' | 'streaming' | 'live-tv' | 'tailscale' | 'backups' | 'migration' | 'crash';
+export type LogCategory = 'server' | 'application' | 'database' | 'updater' | 'transcoding' | 'streaming' | 'tv-discovery' | 'live-tv' | 'tailscale' | 'backups' | 'migration' | 'crash';
 
 const sensitive = /password|wachtwoord|token|secret|authorization|cookie|api[-_]?key/i;
 const defaultMaxFileBytes = 5 * 1024 * 1024;

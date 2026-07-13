@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
-import { api, patch, post, put, type Bootstrap, type MediaItem, type ScanState, type Settings, type Source, type User } from './api';
+import { ApiError, api, patch, post, put, type Bootstrap, type MediaItem, type ScanState, type Settings, type Source, type User } from './api';
 import ServerDashboard from './ServerDashboard';
 import MetadataSettings from './MetadataSettings';
-import { CastButton, CastRemote } from './TvPlayback';
+import { CastButton } from './TvPlayback';
+import { localBrowserDeviceId, PlaybackDeviceLayer, PlaybackDeviceProvider } from './playback-devices';
+import type { PlaybackSession } from './playback-devices';
+import { confirmPlaybackReceiverStatus, controlPlaybackSession, createPlaybackSession, getActivePlaybackSession, stopPlaybackSessionAtLatestRevision, updatePlaybackSession } from './playback-devices/api';
+import { describeCastEnvironment } from './cast';
+import { localPlayerVolume } from './playback-devices/local-player-command';
 
 type View = 'home' | 'movies' | 'series' | 'music' | 'photos' | 'live' | 'watchlist' | 'dashboard' | 'settings';
 type MusicTrack={id:number;title:string;artist:string;album:string;albumArtist?:string;track?:number;disc?:number;year?:number;duration?:number;coverUrl?:string;genres:string[]};
@@ -51,14 +56,20 @@ function formatDuration(seconds: number) {
   return minutes >= 60 ? `${Math.floor(minutes / 60)}u ${minutes % 60}m` : `${minutes} min`;
 }
 
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 function Player({ item, settings, onClose, onProgress, onFinished }: { item: MediaItem; settings: Settings; onClose: () => void; onProgress: (id: number, progress: MediaItem['progress']) => void; onFinished: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState('');
   const [transcoding, setTranscoding] = useState(false);
   const hlsRef = useRef<Hls | null>(null);
   const lastSaved = useRef(0);
-  const sessionId = useRef(crypto.randomUUID());
-  const startedAt = useRef(new Date().toISOString());
+  const playbackSession = useRef<PlaybackSession | null>(null);
+  const reportQueue = useRef<Promise<void>>(Promise.resolve());
+  const closingSessions = useRef(new Set<string>());
+  const restartPosition = useRef<{ mediaId: number; position: number } | null>(null);
   const [markers, setMarkers] = useState<{id:number;type:'intro'|'credits'|'commercial';startTime:number;endTime:number}[]>([]);
   const [activeMarker, setActiveMarker] = useState<typeof markers[number] | null>(null);
   const [speed, setSpeed] = useState(1);
@@ -66,15 +77,61 @@ function Player({ item, settings, onClose, onProgress, onFinished }: { item: Med
   const [playbackInfo,setPlaybackInfo]=useState<any>(null);
   const [showTechnical,setShowTechnical]=useState(false);
 
-  const save = useCallback((state: 'playing'|'paused'|'stopped' = 'playing') => {
+  const report = useCallback((state: 'playing'|'paused'|'error' = 'playing') => {
     const video = videoRef.current;
-    if (!video || !Number.isFinite(video.duration)) return;
-    const payload = { position: video.currentTime, duration: video.duration, state, sessionId: sessionId.current, startedAt: startedAt.current, transcoding };
+    if (!video) return;
+    const position = Math.max(0, Number(video.currentTime) || 0);
+    const duration = Number.isFinite(video.duration) ? Math.max(0, Number(video.duration) || 0) : Math.max(0, Number(playbackSession.current?.duration) || 0);
     lastSaved.current = Date.now();
-    void put<MediaItem['progress']>(`/media/${item.id}/progress`, payload).then(progress => onProgress(item.id, progress)).catch(() => {});
-  }, [item.id, onProgress, transcoding]);
+    reportQueue.current = reportQueue.current.then(async () => {
+      let current = playbackSession.current;
+      if (!current || current.mediaId !== item.id || current.state === 'stopped' || closingSessions.current.has(current.id)) return;
+      const send = () => state === 'playing' || state === 'error'
+        ? confirmPlaybackReceiverStatus(current!.id, Number(current!.revision || 0), state, position, duration)
+        : updatePlaybackSession(current!.id, Number(current!.revision || 0), state, position, duration);
+      try {
+        let response;
+        try { response = await send(); }
+        catch (caught) {
+          if (!(caught instanceof ApiError) || caught.status !== 409 || caught.code !== 'STALE_PLAYBACK_SESSION') throw caught;
+          if (closingSessions.current.has(current.id)) return;
+          const latest = await getActivePlaybackSession();
+          if (!latest.session || latest.session.id !== current.id) {
+            if (playbackSession.current?.id === current.id) playbackSession.current = null;
+            video.pause();
+            return;
+          }
+          current = latest.session;
+          if (closingSessions.current.has(current.id)) return;
+          response = await send();
+        }
+        if (closingSessions.current.has(current.id)) return;
+        if (response.session && playbackSession.current?.id === current.id) playbackSession.current = response.session;
+        if (state !== 'error') onProgress(item.id, { position, duration, completed: duration > 0 && position / duration >= .92 });
+      } catch (caught) {
+        if (state === 'error') setError(errorMessage(caught, 'De lokale afspeelsessie kon niet worden afgesloten.'));
+      }
+    }).catch(() => undefined);
+  }, [item.id, onProgress]);
 
-  const useHls = useCallback((source:string,mode:string) => {
+  const stopSession = useCallback((reason: string) => {
+    const current = playbackSession.current;
+    const video = videoRef.current;
+    if (!current) return;
+    closingSessions.current.add(current.id);
+    playbackSession.current = null;
+    const position = Math.max(0, Number(video?.currentTime) || Number(current.position) || 0);
+    const duration = Number.isFinite(video?.duration) ? Math.max(0, Number(video?.duration) || 0) : Math.max(0, Number(current.duration) || 0);
+    reportQueue.current = reportQueue.current.then(async () => {
+      try {
+        await stopPlaybackSessionAtLatestRevision(current.id, { position, duration, reason }, Number(current.revision || 0));
+        onProgress(item.id, { position, duration, completed: duration > 0 && position / duration >= .92 });
+      } catch { /* De sessie kan intussen door een succesvolle overdracht zijn gestopt. */ }
+      finally { closingSessions.current.delete(current.id); }
+    }).catch(() => undefined);
+  }, [item.id, onProgress]);
+
+  const useHls = useCallback((source:string,mode:string,onFatal?:()=>void) => {
     const video = videoRef.current;
     if (!video) return;
     setError(''); setTranscoding(mode==='transcode');
@@ -84,28 +141,45 @@ function Player({ item, settings, onClose, onProgress, onFinished }: { item: Med
       hlsRef.current = hls;
       hls.loadSource(source); hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
-      hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) setError('Deze video kon niet worden omgezet. Controleer het bestand en probeer opnieuw.'); });
+      hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) { setError('Deze video kon niet worden omgezet. Controleer het bestand en probeer opnieuw.'); onFatal?.(); } });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = source; }
   }, []);
 
   useEffect(() => {
     const video = videoRef.current!;let cancelled=false;
     hlsRef.current?.destroy();setError('');
-    void post<any>(`/playback/${item.id}/decision`,{quality,network:'lan'}).then(result=>{if(cancelled)return;setPlaybackInfo(result);setTranscoding(result.decision.mode==='transcode');if(result.decision.mode==='direct_play')video.src=result.urls.playback;else useHls(result.urls.playback,result.decision.mode)}).catch(e=>setError(e.message));
-    const restore = () => { if (item.progress?.position && item.progress.position < video.duration * .92) video.currentTime = Math.max(0, item.progress.position - settings.rewindOnResume); };
-    const timer = window.setInterval(() => { if (!video.paused && Date.now() - lastSaved.current > 8000) save(); }, 3000);
+    playbackSession.current=null;
+    const requestedPosition = restartPosition.current?.mediaId !== item.id
+      ? Math.max(0, Number(item.progress?.position || 0) - Number(settings.rewindOnResume || 0))
+      : Math.max(0, restartPosition.current.position);
+    restartPosition.current = null;
+    let sessionCreated: PlaybackSession | null = null;
+    void createPlaybackSession(item.id,localBrowserDeviceId(),requestedPosition,quality).then(result=>{
+      if(!result.session)throw new Error('De centrale lokale afspeelsessie ontbreekt.');
+      sessionCreated=result.session;
+      if(cancelled){void controlPlaybackSession(result.session.id,'stop',{reason:'local-player-cancelled'},result.session.revision).catch(()=>undefined);return;}
+      playbackSession.current=result.session;
+      video.dataset.thuishubPlaybackSession=result.session.id;
+      setPlaybackInfo(result);setTranscoding((result.decision as any)?.mode==='transcode');
+      if((result.decision as any)?.mode==='direct_play')video.src=String(result.urls?.playback||'');
+      else useHls(String(result.urls?.playback||''),String((result.decision as any)?.mode||''),()=>report('error'));
+    }).catch(caught=>{if(!cancelled){setError(errorMessage(caught,'De lokale video kon niet starten.'));if(sessionCreated)report('error');}});
+    const restore = () => { if (requestedPosition > 0 && requestedPosition < video.duration * .92) video.currentTime = requestedPosition; };
+    const timer = window.setInterval(() => { if (!video.paused && Date.now() - lastSaved.current > 8000) report('playing'); }, 3000);
     video.addEventListener('loadedmetadata', restore, { once: true });
-    return () => { cancelled=true;window.clearInterval(timer); save('stopped'); hlsRef.current?.destroy();video.removeAttribute('src');video.load(); };
+    return () => { cancelled=true;window.clearInterval(timer);restartPosition.current={mediaId:item.id,position:Math.max(0,Number(video.currentTime)||0)};stopSession('local-player-closed');hlsRef.current?.destroy();video.removeEventListener('loadedmetadata',restore);delete video.dataset.thuishubPlaybackSession;video.removeAttribute('src');video.load(); };
   }, [item.id,quality]);
 
   useEffect(()=>{void api<typeof markers>(`/media/${item.id}/markers`).then(setMarkers);},[item.id]);
   useEffect(()=>{const video=videoRef.current;if(!video)return;const track=()=>setActiveMarker(markers.find(marker=>video.currentTime>=marker.startTime&&video.currentTime<marker.endTime)||null);video.addEventListener('timeupdate',track);return()=>video.removeEventListener('timeupdate',track);},[markers]);
+  useEffect(()=>{const transferred=(event:Event)=>{const detail=(event as CustomEvent<{mediaId:number}>).detail;if(detail?.mediaId!==item.id)return;videoRef.current?.pause();onClose();};window.addEventListener('thuishub-playback-transferred',transferred);return()=>window.removeEventListener('thuishub-playback-transferred',transferred);},[item.id,onClose]);
+  useEffect(()=>{const commanded=(event:Event)=>{const detail=(event as CustomEvent<{sessionId:string;command:string;payload:Record<string,unknown>}>).detail;const current=playbackSession.current;const video=videoRef.current;if(!current||!video||detail?.sessionId!==current.id)return;if(detail.command==='play')void video.play();else if(detail.command==='pause')video.pause();else if(detail.command==='seek'){video.currentTime=Math.max(0,Number(detail.payload?.position)||0);report(video.paused?'paused':'playing');}else if(detail.command==='volume'){const volume=localPlayerVolume(detail.payload||{});if(volume!==null)video.volume=volume;}else if(detail.command==='stop')onClose();};window.addEventListener('thuishub-local-player-command',commanded);return()=>window.removeEventListener('thuishub-local-player-command',commanded);},[onClose,report]);
   function changeSpeed(value:number){setSpeed(value);if(videoRef.current)videoRef.current.playbackRate=value;}
-  function finish(){save('stopped');onFinished();}
+  function finish(){stopSession('completed');onFinished();}
 
   return <div className="player-layer">
-    <div className="player-top"><div><strong>{item.kind === 'episode' ? item.seriesTitle : item.title}</strong>{item.kind === 'episode' && <span>S{item.season} · A{item.episode} · {item.title}</span>}{playbackInfo&&<span className={`playback-mode ${playbackInfo.decision.mode}`}>{playbackInfo.decision.label}</span>}</div><div className="player-actions"><CastButton item={item} settings={settings} onError={setError}/><label>Kwaliteit <select value={quality} onChange={e=>setQuality(e.target.value)}><option value="auto">Automatisch</option><option value="original">Origineel</option><option value="4k-max">4K Maximum</option><option value="4k-high">4K Hoog</option><option value="4k-balanced">4K Gebalanceerd</option><option value="1080p-max">1080p Maximum</option><option value="1080p-high">1080p Hoog</option><option value="1080p-balanced">1080p Gebalanceerd</option><option value="720p">720p</option><option value="data-saver">Databesparing</option></select></label><label>Snelheid <select value={speed} onChange={e=>changeSpeed(Number(e.target.value))}>{[.5,.75,1,1.25,1.5,2].map(x=><option key={x} value={x}>{x}×</option>)}</select></label><button onClick={()=>setShowTechnical(!showTechnical)}>Technische informatie</button><button className="icon-button" onClick={onClose} aria-label="Sluiten"><Icon name="close" /></button></div></div>
-    <video ref={videoRef} controls autoPlay playsInline onPlay={()=>save('playing')} onPause={()=>save('paused')} onEnded={finish}>
+    <div className="player-top"><div><strong>{item.kind === 'episode' ? item.seriesTitle : item.title}</strong>{item.kind === 'episode' && <span>S{item.season} · A{item.episode} · {item.title}</span>}{playbackInfo&&<span className={`playback-mode ${playbackInfo.decision.mode}`}>{playbackInfo.decision.label}</span>}</div><div className="player-actions"><CastButton item={item} settings={settings} onError={setError} getStartPosition={()=>Number(videoRef.current?.currentTime || item.progress?.position || 0)}/><label>Kwaliteit <select value={quality} onChange={e=>setQuality(e.target.value)}><option value="auto">Automatisch</option><option value="original">Origineel</option><option value="4k-max">4K Maximum</option><option value="4k-high">4K Hoog</option><option value="4k-balanced">4K Gebalanceerd</option><option value="1080p-max">1080p Maximum</option><option value="1080p-high">1080p Hoog</option><option value="1080p-balanced">1080p Gebalanceerd</option><option value="720p">720p</option><option value="data-saver">Databesparing</option></select></label><label>Snelheid <select value={speed} onChange={e=>changeSpeed(Number(e.target.value))}>{[.5,.75,1,1.25,1.5,2].map(x=><option key={x} value={x}>{x}×</option>)}</select></label><button onClick={()=>setShowTechnical(!showTechnical)}>Technische informatie</button><button className="icon-button" onClick={onClose} aria-label="Sluiten"><Icon name="close" /></button></div></div>
+    <video ref={videoRef} controls autoPlay playsInline onPlaying={()=>report('playing')} onPause={()=>report('paused')} onError={()=>report('error')} onEnded={finish}>
       {item.hasSubtitle && playbackInfo?.urls.subtitle && <track default kind="subtitles" srcLang="nl" label="Nederlands" src={playbackInfo.urls.subtitle} />}
     </video>
     {transcoding && !error && <div className="player-status"><span className="spinner" /><strong>Video wordt klaargemaakt</strong><small>De eerste keer kan dit even duren</small></div>}
@@ -193,6 +267,28 @@ function FolderPicker({ value, onChoose, onClose }: { value: string; onChoose: (
   </section></div>;
 }
 
+function TvNetworkSettingsPanel({settings,reload}:{settings:Settings;reload:()=>Promise<void>}){
+  const[state,setState]=useState({localStreamingEnabled:settings.localStreamingEnabled,localStreamingAddress:settings.localStreamingAddress,localStreamingPort:settings.localStreamingPort,automaticDeviceDiscovery:settings.automaticDeviceDiscovery,dlnaDiscoveryEnabled:settings.dlnaDiscoveryEnabled,deviceRetentionDays:settings.deviceRetentionDays,castReceiverAppId:settings.castReceiverAppId,defaultQualityLan:settings.defaultQualityLan,defaultQualityTailscale:settings.defaultQualityTailscale,defaultQualityMobile:settings.defaultQualityMobile,defaultQualityDownload:settings.defaultQualityDownload,defaultQualityLiveTv:settings.defaultQualityLiveTv});
+  const[addresses,setAddresses]=useState<string[]>([]);const[diagnostics,setDiagnostics]=useState<any>(null);const[busy,setBusy]=useState(false);const[notice,setNotice]=useState('');const[error,setError]=useState('');
+  const[cast,setCast]=useState(describeCastEnvironment);
+  const load=useCallback(async()=>{const[network,status]=await Promise.all([api<any>('/network/interfaces'),api<any>('/playback-devices/diagnostics')]);setAddresses(network.addresses||[]);setDiagnostics(status)},[]);
+  useEffect(()=>{void load().catch(caught=>setError(caught.message))},[load]);
+  useEffect(()=>{const update=()=>setCast(describeCastEnvironment());window.addEventListener('thuishub-cast-ready',update);update();return()=>window.removeEventListener('thuishub-cast-ready',update)},[]);
+  const save=async()=>{setBusy(true);setError('');setNotice('');try{await patch('/settings',state);await reload();await load();setNotice('Netwerk- en tv-instellingen opgeslagen. Herstart ThuisHub wanneer adres, poort of discovery is gewijzigd.')}catch(caught:any){setError(caught.message)}finally{setBusy(false)}};
+  const scan=async()=>{setBusy(true);setError('');setNotice('');try{await post('/playback-devices/discover',{});await load();setNotice('Automatisch zoeken is afgerond.')}catch(caught:any){setError(caught.message)}finally{setBusy(false)}};
+  const qualities=[['auto','Automatisch'],['original','Origineel'],['4k-max','4K Maximum · 80 Mbps'],['4k-high','4K Hoog · 40 Mbps'],['4k-balanced','4K Gebalanceerd · 25 Mbps'],['1080p-max','1080p Maximum · 20 Mbps'],['1080p-high','1080p Hoog · 12 Mbps'],['1080p-balanced','1080p Gebalanceerd · 8 Mbps'],['720p','720p · 4 Mbps'],['data-saver','Databesparing · 2 Mbps']];
+  const firewallCommand=state.localStreamingAddress?`.\\scripts\\configure-private-streaming.ps1 -Action enable -Address ${state.localStreamingAddress} -Port ${state.localStreamingPort}`:'.\\scripts\\configure-private-streaming.ps1 -Action enable -Address <kies-eerst-een-adres> -Port 8788';
+  return <section className="panel span-2 tv-network-settings"><div className="panel-heading"><div><h2>Netwerk en tv-streaming</h2><p>Apparaten worden automatisch gevonden; een tv-IP of Chromecast-ID invoeren is niet nodig.</p></div><span className="premium-badge">PRIVÉ-LAN</span></div>
+    {(notice||error)&&<div className={`alert ${error?'error':'success'}`} role={error?'alert':'status'}>{error||notice}</div>}
+    <div className="toggle-grid"><label><input type="checkbox" checked={state.localStreamingEnabled} onChange={event=>setState({...state,localStreamingEnabled:event.target.checked})}/><span><strong>Streamen binnen thuisnetwerk</strong><small>Tijdelijke ondertekende links; geen routerpoorten</small></span></label><label><input type="checkbox" checked={state.automaticDeviceDiscovery} onChange={event=>setState({...state,automaticDeviceDiscovery:event.target.checked})}/><span><strong>Automatisch apparaten zoeken</strong><small>Bij starten, netwerkverandering en openen van de kiezer</small></span></label><label><input type="checkbox" checked={state.dlnaDiscoveryEnabled} onChange={event=>setState({...state,dlnaDiscoveryEnabled:event.target.checked})}/><span><strong>DLNA en smart-tv's zoeken</strong><small>Alleen MediaRenderers op het gekozen privé-netwerk</small></span></label></div>
+    <div className="tv-status-grid" aria-live="polite"><span><small>Google Cast</small><strong>{cast.available?'Beschikbaar':cast.message}</strong></span><span><small>DLNA en smart-tv's</small><strong>{diagnostics?`${diagnostics.counts?.dlna||0} gevonden`:'Controleren…'}</strong></span><span><small>Gekoppelde ThuisHub-apps</small><strong>{diagnostics?.counts?.pairedApps||0}</strong></span><span><small>Lokale streamserver</small><strong>{diagnostics?.streaming?.listening?`Actief op ${diagnostics.streaming.address}:${diagnostics.streaming.port}`:'Niet actief'}</strong></span></div>
+    <div className="advanced-fields"><label>Privé-LAN-adres<select value={state.localStreamingAddress} onChange={event=>setState({...state,localStreamingAddress:event.target.value})}><option value="">Selecteer adres</option>{addresses.map(address=><option key={address}>{address}</option>)}</select></label><label>Streamingpoort<input type="number" min="1024" max="65535" value={state.localStreamingPort} onChange={event=>setState({...state,localStreamingPort:Number(event.target.value)})}/></label><label>Gevonden apparaten bewaren (dagen)<input type="number" min="1" max="365" value={state.deviceRetentionDays} onChange={event=>setState({...state,deviceRetentionDays:Number(event.target.value)})}/></label>{([['defaultQualityLan','Thuisnetwerk'],['defaultQualityTailscale','Tailscale'],['defaultQualityMobile','Mobiel internet'],['defaultQualityDownload','Downloads'],['defaultQualityLiveTv','Live TV']] as const).map(([key,label])=><label key={key}>Standaardkwaliteit {label}<select value={state[key]} onChange={event=>setState({...state,[key]:event.target.value})}>{qualities.map(([value,text])=><option key={value} value={value}>{text}</option>)}</select></label>)}</div>
+    <div className="button-row"><button className="primary" disabled={busy} onClick={()=>void save()}>Opslaan</button><button className="secondary" disabled={busy} onClick={()=>void scan()}>{busy?'Bezig…':'Opnieuw zoeken'}</button><button className="secondary" onClick={()=>{location.href='/?view=dashboard&section=devices'}}>Problemen oplossen</button></div>
+    <details className="developer-options"><summary>Geavanceerd · Ontwikkelaarsopties</summary><label>Google Cast Receiver App ID<input value={state.castReceiverAppId} onChange={event=>setState({...state,castReceiverAppId:event.target.value.toUpperCase()})} placeholder="Leeg = standaard Google Media Receiver"/></label><p>Alleen nodig voor een aangepaste ThuisHub Cast Receiver. Laat leeg om de standaard Google Media Receiver te gebruiken.</p></details>
+    <p className="dashboard-note">Voer daarna bewust als administrator <code>{firewallCommand}</code> uit. De regels gelden uitsluitend voor profiel Privé, LocalSubnet en het gekozen lokale adres.</p>
+  </section>;
+}
+
 function SettingsPanel({ bootstrap, reload, refreshLibrary }: { bootstrap: Bootstrap; reload: () => Promise<void>; refreshLibrary: () => Promise<void> }) {
   const [serverName, setServerName] = useState(bootstrap.settings.serverName);
   const [sourceForm, setSourceForm] = useState({ name: '', path: '', kind: 'movies' as 'movies'|'series' });
@@ -202,8 +298,6 @@ function SettingsPanel({ bootstrap, reload, refreshLibrary }: { bootstrap: Boots
   const [users, setUsers] = useState<User[]>([]);
   const [userForm, setUserForm] = useState({ username: '', password: '' });
   const [advanced,setAdvanced]=useState({autoplay:bootstrap.settings.autoplay,rewindOnResume:bootstrap.settings.rewindOnResume,skipIntro:bootstrap.settings.skipIntro,skipCredits:bootstrap.settings.skipCredits,hardwareTranscoding:bootstrap.settings.hardwareTranscoding,toneMapping:bootstrap.settings.toneMapping,maxTranscodes:bootstrap.settings.maxTranscodes,uploadLimitMbps:bootstrap.settings.uploadLimitMbps});
-  const [networkSettings,setNetworkSettings]=useState({localStreamingEnabled:bootstrap.settings.localStreamingEnabled,localStreamingAddress:bootstrap.settings.localStreamingAddress,localStreamingPort:bootstrap.settings.localStreamingPort,castReceiverAppId:bootstrap.settings.castReceiverAppId,defaultQualityLan:bootstrap.settings.defaultQualityLan,defaultQualityTailscale:bootstrap.settings.defaultQualityTailscale,defaultQualityMobile:bootstrap.settings.defaultQualityMobile,defaultQualityDownload:bootstrap.settings.defaultQualityDownload,defaultQualityLiveTv:bootstrap.settings.defaultQualityLiveTv});
-  const [lanAddresses,setLanAddresses]=useState<string[]>([]);
   const [dashboard,setDashboard]=useState<any>(null);
   const [webhooks,setWebhooks]=useState<any[]>([]);
   const [hookUrl,setHookUrl]=useState('');
@@ -218,7 +312,7 @@ function SettingsPanel({ bootstrap, reload, refreshLibrary }: { bootstrap: Boots
   const [tvForm,setTvForm]=useState({name:'',playlistUrl:'',xmltvUrl:'',recordingPath:''});
   const [tvPicker,setTvPicker]=useState(false);
   const isAdmin = bootstrap.user.role === 'admin';
-  useEffect(() => { if (isAdmin) void Promise.all([api<User[]>('/users').then(setUsers),api('/dashboard').then(setDashboard),api<any[]>('/webhooks').then(setWebhooks),api<any[]>('/extra-sources').then(setExtraSources),api<any[]>('/tv/sources').then(setTvSources),api<any>('/network/interfaces').then(result=>setLanAddresses(result.addresses))]);void api<any[]>('/playlists').then(setPlaylists);void api<any[]>('/collections').then(setCollections); }, [isAdmin]);
+  useEffect(() => { if (isAdmin) void Promise.all([api<User[]>('/users').then(setUsers),api('/dashboard').then(setDashboard),api<any[]>('/webhooks').then(setWebhooks),api<any[]>('/extra-sources').then(setExtraSources),api<any[]>('/tv/sources').then(setTvSources)]);void api<any[]>('/playlists').then(setPlaylists);void api<any[]>('/collections').then(setCollections); }, [isAdmin]);
   async function act(fn: () => Promise<any>, success: string) { setError(''); setMessage(''); try { await fn(); setMessage(success); await reload(); } catch(e:any) { setError(e.message); } }
   async function addSource(e: React.FormEvent) { e.preventDefault(); await act(() => post('/sources', sourceForm), 'Bibliotheek toegevoegd. Start nu een scan.'); setSourceForm({ name:'', path:'', kind:'movies' }); }
   async function startScan() { await act(() => post('/scan'), 'De scan is gestart.'); }
@@ -238,7 +332,7 @@ function SettingsPanel({ bootstrap, reload, refreshLibrary }: { bootstrap: Boots
       </section>
       <MetadataSettings/>
       <section className="panel span-2"><div className="panel-heading"><div><h2>Premium afspelen</h2><p>Hardware-transcoding, HDR en automatisch doorspelen.</p></div><span className="premium-badge">THUISHUB PRO · INBEGREPEN</span></div><div className="toggle-grid"><label><input type="checkbox" checked={advanced.autoplay} onChange={e=>setAdvanced({...advanced,autoplay:e.target.checked})}/><span><strong>Autoplay</strong><small>Speel de volgende aflevering automatisch</small></span></label><label><input type="checkbox" checked={advanced.skipIntro} onChange={e=>setAdvanced({...advanced,skipIntro:e.target.checked})}/><span><strong>Intro overslaan</strong><small>Toon de knop binnen een intromarker</small></span></label><label><input type="checkbox" checked={advanced.skipCredits} onChange={e=>setAdvanced({...advanced,skipCredits:e.target.checked})}/><span><strong>Credits overslaan</strong><small>Ga sneller naar de volgende aflevering</small></span></label><label><input type="checkbox" checked={advanced.toneMapping} onChange={e=>setAdvanced({...advanced,toneMapping:e.target.checked})}/><span><strong>HDR-tone-mapping</strong><small>Correcte kleuren op SDR-schermen</small></span></label></div><div className="advanced-fields"><label>Transcoder<select value={advanced.hardwareTranscoding} onChange={e=>setAdvanced({...advanced,hardwareTranscoding:e.target.value})}><option value="auto">Automatisch (aanbevolen)</option><option value="nvidia">NVIDIA NVENC</option><option value="amd">AMD AMF</option><option value="intel">Intel Quick Sync</option><option value="software">Alleen processor</option></select></label><label>Terugspoelen bij hervatten<input type="number" min="0" max="30" value={advanced.rewindOnResume} onChange={e=>setAdvanced({...advanced,rewindOnResume:Number(e.target.value)})}/></label><label>Max. gelijktijdige transcodes<input type="number" min="1" max="10" value={advanced.maxTranscodes} onChange={e=>setAdvanced({...advanced,maxTranscodes:Number(e.target.value)})}/></label><label>Uploadlimiet (Mbps, 0 = onbeperkt)<input type="number" min="0" value={advanced.uploadLimitMbps} onChange={e=>setAdvanced({...advanced,uploadLimitMbps:Number(e.target.value)})}/></label></div><button className="primary" onClick={()=>act(()=>patch('/settings',advanced),'Premium afspeelinstellingen opgeslagen.')}>Instellingen opslaan</button></section>
-      <section className="panel span-2"><div className="panel-heading"><div><h2>Netwerk en tv-streaming</h2><p>De beheerinterface blijft op 127.0.0.1. Alleen beperkte, ondertekende afspeelroutes worden op het gekozen privé-adres aangeboden.</p></div><span className="premium-badge">PRIVÉ-LAN</span></div><div className="toggle-grid"><label><input type="checkbox" checked={networkSettings.localStreamingEnabled} onChange={e=>setNetworkSettings({...networkSettings,localStreamingEnabled:e.target.checked})}/><span><strong>Streamen binnen thuisnetwerk</strong><small>Geen routerpoorten en geen openbare netwerkprofielen</small></span></label></div><div className="advanced-fields"><label>Privé-LAN-adres<select value={networkSettings.localStreamingAddress} onChange={e=>setNetworkSettings({...networkSettings,localStreamingAddress:e.target.value})}><option value="">Selecteer adres</option>{lanAddresses.map(address=><option key={address}>{address}</option>)}</select></label><label>Streamingpoort<input type="number" min="1024" max="65535" value={networkSettings.localStreamingPort} onChange={e=>setNetworkSettings({...networkSettings,localStreamingPort:Number(e.target.value)})}/></label><label>Google Cast Receiver App ID<input value={networkSettings.castReceiverAppId} onChange={e=>setNetworkSettings({...networkSettings,castReceiverAppId:e.target.value.toUpperCase()})} placeholder="Leeg = standaardreceiver"/></label>{([['defaultQualityLan','Thuisnetwerk'],['defaultQualityTailscale','Tailscale'],['defaultQualityMobile','Mobiel internet'],['defaultQualityDownload','Downloads'],['defaultQualityLiveTv','Live TV']] as const).map(([key,label])=><label key={key}>Standaardkwaliteit {label}<select value={networkSettings[key]} onChange={e=>setNetworkSettings({...networkSettings,[key]:e.target.value})}>{[['auto','Automatisch'],['original','Origineel'],['4k-max','4K Maximum · 80 Mbps'],['4k-high','4K Hoog · 40 Mbps'],['4k-balanced','4K Gebalanceerd · 25 Mbps'],['1080p-max','1080p Maximum · 20 Mbps'],['1080p-high','1080p Hoog · 12 Mbps'],['1080p-balanced','1080p Gebalanceerd · 8 Mbps'],['720p','720p · 4 Mbps'],['data-saver','Databesparing · 2 Mbps']].map(([value,text])=><option key={value} value={value}>{text}</option>)}</select></label>)}</div><div className="button-row"><button className="primary" onClick={()=>act(()=>patch('/settings',networkSettings),'Netwerkinstellingen opgeslagen. Herstart ThuisHub om de streamingpoort toe te passen.')}>Opslaan</button></div><p className="dashboard-note">Voer daarna bewust als administrator <code>scripts\configure-private-streaming.ps1 enable</code> uit voor een firewallregel die uitsluitend op het Windows-profiel Privé en LocalSubnet geldt.</p></section>
+      <TvNetworkSettingsPanel settings={bootstrap.settings} reload={reload}/>
       <section className="panel"><h2>Playlists</h2><p>Maak afspeellijsten en voeg media toe vanaf een detailpagina.</p><div className="compact-list">{playlists.map(p=><span key={p.id}><strong>{p.name}</strong><small>{p.itemCount} items</small></span>)}</div><form className="inline-form" onSubmit={async e=>{e.preventDefault();const p=await post<any>('/playlists',{name:playlistName});setPlaylists([...playlists,p]);setPlaylistName('')}}><input required placeholder="Nieuwe playlist" value={playlistName} onChange={e=>setPlaylistName(e.target.value)}/><button className="primary"><Icon name="plus"/></button></form></section>
       <section className="panel"><h2>Collecties</h2><p>Groepeer films en series in eigen verzamelingen.</p><div className="compact-list">{collections.map(c=><span key={c.id}><strong>{c.name}</strong><small>{c.itemCount} items</small></span>)}</div><form className="inline-form" onSubmit={async e=>{e.preventDefault();const c=await post<any>('/collections',{name:collectionName});setCollections([...collections,c]);setCollectionName('')}}><input required placeholder="Nieuwe collectie" value={collectionName} onChange={e=>setCollectionName(e.target.value)}/><button className="primary"><Icon name="plus"/></button></form></section>
       <section className="panel span-2"><h2>Gebruikers</h2><p>Ieder profiel houdt zijn eigen kijkvoortgang bij.</p><div className="user-chips">{users.map(user=><span key={user.id}>{user.username}<small>{user.role === 'admin' ? 'Beheerder' : 'Gebruiker'}</small></span>)}</div><form className="user-form" onSubmit={e=>{e.preventDefault(); act(()=>post<User>('/users',userForm).then(u=>setUsers([...users,u])), 'Gebruiker toegevoegd.'); setUserForm({username:'',password:''});}}><input required placeholder="Gebruikersnaam" value={userForm.username} onChange={e=>setUserForm({...userForm,username:e.target.value})}/><input required type="password" placeholder="Wachtwoord (min. 8 tekens)" value={userForm.password} onChange={e=>setUserForm({...userForm,password:e.target.value})}/><button className="primary">Gebruiker toevoegen</button></form></section>
@@ -301,7 +395,7 @@ export default function App() {
   if(!bootstrap) return <div className="splash"><img className="splash-logo" src="/brand/thuishub-icon-256.png" alt="ThuisHub"/>{loadError?<><div className="alert error">{loadError}</div><button className="primary" onClick={()=>void initialize()}>Opnieuw proberen</button></>:<span className="spinner" />}</div>;
 
   const nav=(next:View)=>{setView(next);setSearch('');window.scrollTo(0,0);};
-  return <div className="app-shell">
+  return <PlaybackDeviceProvider settings={bootstrap.settings} onPlayLocal={item=>{setSelected(null);setPlaying(item);}}><div className="app-shell">
     <aside className="sidebar"><button className="brand" onClick={()=>nav('home')}><img className="sidebar-logo" src="/brand/thuishub-icon-128.png" alt=""/><span>{bootstrap.settings.serverName}</span></button><nav>{([['home','home','Start'],['movies','movie','Films'],['series','series','Series'],['music','music','Muziek'],['photos','photos','Foto’s'],['live','live','Live TV'],['watchlist','watchlist','Mijn lijst'],...(bootstrap.user.role==='admin'?[['dashboard','settings','Dashboard']]:[]),['settings','settings','Instellingen']] as [View,any,string][]).map(([id,icon,label])=><button key={id} className={view===id?'active':''} onClick={()=>nav(id)}><Icon name={icon}/><span>{label}</span></button>)}</nav><div className="sidebar-user"><div className="avatar">{bootstrap.user.username.slice(0,1).toUpperCase()}</div><span><strong>{bootstrap.user.username}</strong><small>{bootstrap.user.role==='admin'?'Beheerder':'Gebruiker'}</small></span></div></aside>
     <main className="content">
       {!['settings','dashboard'].includes(view)&&<header className="topbar"><button className="mobile-brand" onClick={()=>nav('home')}><img className="sidebar-logo" src="/brand/thuishub-icon-128.png" alt="ThuisHub"/></button><div className="search"><Icon name="search"/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Zoek in je bibliotheek…"/></div>{bootstrap.scan.running&&<div className="scan-pill"><span className="spinner tiny"/>Scannen {bootstrap.scan.scanned}/{bootstrap.scan.total||'?'}</div>}</header>}
@@ -327,8 +421,8 @@ export default function App() {
     {editor&&<MetadataEditor item={editor} onClose={()=>setEditor(null)} onSaved={saveEdited}/>} 
     {notice&&<div className="toast">{notice}</div>}
     {audioTrack&&<AudioPlayer track={audioTrack} onClose={()=>setAudioTrack(null)} onEnded={()=>{const index=music.findIndex(x=>x.id===audioTrack.id);setAudioTrack(music[index+1]||null)}}/>}
-    <CastRemote/>
-  </div>;
+    <PlaybackDeviceLayer/>
+  </div></PlaybackDeviceProvider>;
 }
 
 function Shelf({title,action,children}:{title:string;action?:()=>void;children:React.ReactNode}) { return <section className="shelf"><div className="section-title"><h2>{title}</h2>{action&&<button onClick={action}>Alles bekijken →</button>}</div><div className="card-row">{children}</div></section>; }

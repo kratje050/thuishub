@@ -22,31 +22,185 @@ import { previewThumbnail } from '../thumbnails.js';
 import { photoThumbnail } from '../extra-media.js';
 import { refreshTvSource } from '../live-tv.js';
 import { createBackup, exportDatabase, listBackups, resolveBackup, scheduleRestore, verifyBackup } from '../backup.js';
-import { APP_NAME, APP_VERSION } from '../constants.js';
+import { APP_NAME, APP_PORT, APP_VERSION } from '../constants.js';
 import { appPaths } from '../paths.js';
 import { clearLogs, log, logStorageBytes, readLogs, setMaxLogStorageMb } from '../logger.js';
 import { tailscaleStatus } from '../tailscale.js';
 import { checkForUpdates, downloadedUpdateStatus, downloadUpdate, requestUpdateInstall } from '../updates.js';
 import { BROWSER_CAPABILITIES, CAST_CAPABILITIES, QUALITY_PROFILES, decisionEngine, type DeviceCapabilities, type QualityId } from '../playback.js';
 import { mediaCapabilitiesFromRow } from '../media-info.js';
-import { createPlaybackToken } from '../playback-tokens.js';
-import { acknowledgeDeviceCommand, approvePairing, claimPairing, deviceCapabilities, forgetDevice, listDevices, pendingDeviceCommands, queueDeviceCommand, requestPairing, requireDevice, setDeviceOverrides } from '../devices.js';
-import { assignedPrivateAddresses } from '../network.js';
+import { createPlaybackGrant, createPlaybackToken, renewPlaybackGrant } from '../playback-tokens.js';
+import { acknowledgeDeviceCommand, approvePairing, claimPairing, deviceCapabilities, forgetDevice, listDevices, pendingDeviceCommands, requestPairing, requireDevice, setDeviceOverrides } from '../devices.js';
+import { assignedPrivateAddresses, isLanListenerEndpoint, isPrivateIpv4, isValidLanStreamingPort, lanPlaybackBaseUrl, lanStreamingStatus } from '../network.js';
+import { playbackDeviceRegistry } from '../playback-devices/registry.js';
+import { diagnostics as playbackDiscoveryDiagnostics, discoverPlaybackDevices } from '../playback-devices/discovery-service.js';
+import { controlPlaybackSession, createPlaybackSession, getActivePlaybackSession, getPlaybackSession, listActivePlaybackSessions, playbackTransferSourceId, stopPlaybackSession, updatePlaybackSession } from '../playback-devices/sessions.js';
+import { DlnaController, type DlnaControllerTarget } from '../playback-devices/providers/dlna.js';
+import { startConfirmedDlnaPlayback } from '../playback-devices/dlna-start.js';
+import { broadcastPlaybackSession, dispatchDeviceCommand } from '../playback-devices/websocket.js';
+import { runDiscoveryDiagnostics } from '../playback-devices/diagnostics.js';
+import { adjacentEpisodeId } from '../playback-devices/navigation.js';
+import { abortPlaybackTransfer, armPlaybackTransferTimeout, assertPlaybackTransferControllerActionAllowed, disarmPlaybackTransferTimeout, finalizePlaybackTransfer, isPendingPlaybackTransfer, resolvePlaybackHandoffSource, stopPlaybackReceiver } from '../playback-devices/transfers.js';
+import { databaseTimestampMs } from '../time.js';
 
 export const apiRouter = Router();
 const deviceRatingLevels:Record<string,number>={ALL:99,AL:0,G:0,TV_Y:0,TV_G:0,'6':6,PG:8,TV_PG:9,'9':9,'12':12,PG_13:13,'14':14,TV_14:14,'16':16,R:16,NC_17:18,'18':18,TV_MA:18};
 
-apiRouter.post('/devices/pair/request', (req,res,next)=>{try{res.status(201).json(requestPairing(req.body||{}))}catch(error){next(error)}});
-apiRouter.post('/devices/pair/claim', (req,res)=>{const result=claimPairing(String(req.body?.deviceId||''),String(req.body?.pairingSecret||''));res.status(result.status==='expired'?410:200).json(result)});
+const pairingAttempts = new Map<string,{count:number;resetAt:number}>();
+function pairingRateLimit(limit=20){return(req:any,res:any,next:any)=>{const key=String(req.socket.remoteAddress||'unknown').replace(/^::ffff:/,'');const now=Date.now();const current=pairingAttempts.get(key);const bucket=!current||current.resetAt<=now?{count:0,resetAt:now+60_000}:current;bucket.count+=1;pairingAttempts.set(key,bucket);if(bucket.count>limit){res.setHeader('Retry-After',String(Math.ceil((bucket.resetAt-now)/1000)));return res.status(429).json({error:'Te veel koppelpogingen. Wacht een minuut en probeer opnieuw.'})}next()}};
+function requirePairingLanListener(req:any,res:any,next:any){const status=lanStreamingStatus();if(!status.listening||!isLanListenerEndpoint(req.socket.localAddress,req.socket.localPort,status.address,status.port))return res.status(403).json({error:'Een tv kan alleen koppelen via de beperkte poort van hetzelfde privé-thuisnetwerk.'});next()}
+
+apiRouter.post('/devices/pair/request',requirePairingLanListener,pairingRateLimit(), (req,res,next)=>{try{const remote=String(req.socket.remoteAddress||'').replace(/^::ffff:/,'');res.status(201).json(requestPairing({...req.body,address:isPrivateIpv4(remote)?remote:undefined}))}catch(error){next(error)}});
+apiRouter.post('/devices/pair/claim',requirePairingLanListener,pairingRateLimit(30), (req,res)=>{const result=claimPairing(String(req.body?.deviceId||''),String(req.body?.pairingSecret||''));res.status(result.status==='expired'?410:200).json(result)});
 apiRouter.get('/device/commands',requireDevice,(req,res)=>res.json({items:pendingDeviceCommands(req.playbackDevice!.id)}));
 apiRouter.post('/device/commands/:id/ack',requireDevice,(req,res)=>res.json({ok:acknowledgeDeviceCommand(req.playbackDevice!.id,Number(req.params.id))}));
 apiRouter.get('/device/library',requireDevice,(req,res)=>{const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;if(!profile)return res.status(403).end();const rows=db.prepare('SELECT * FROM media_items ORDER BY sort_title COLLATE NOCASE').all() as any[];const max=deviceRatingLevels[String(profile.maxRating||'ALL').toUpperCase().replace(/[- ]/g,'_')]??99;res.json(rows.filter(row=>profile.role==='admin'||max===99||Boolean(row.content_rating&&row.content_rating!=='ONBEKEND'&&(deviceRatingLevels[String(row.content_rating).toUpperCase().replace(/[- ]/g,'_')]??99)<=max)).map(row=>({id:row.id,kind:row.kind,title:row.title,seriesTitle:row.series_title,season:row.season,episode:row.episode,year:row.year,width:row.width,height:row.height,hdrType:row.hdr_type,audioCodec:row.audio_codec,atmos:Boolean(row.atmos),posterUrl:imageApiUrl(row.id,'poster')})))});
-apiRouter.post('/device/media/:id/decision',requireDevice,(req,res)=>{const mediaId=Number(req.params.id);const row=db.prepare('SELECT * FROM media_items WHERE id=?').get(mediaId) as any;if(!row)return res.status(404).json({error:'Media niet gevonden.'});const capabilities=deviceCapabilities(req.playbackDevice!.id);if(!capabilities)return res.status(403).json({error:'Apparaatprofiel ontbreekt.'});const decision=decisionEngine({media:mediaCapabilitiesFromRow(row),device:capabilities,quality:(req.body?.quality||'auto') as QualityId,availableBandwidthMbps:Number(req.body?.availableBandwidthMbps)||undefined,network:req.body?.network||'lan'});const address=getSetting('localStreamingAddress','');const port=Number(getSetting('localStreamingPort','8788'));const base=address?`http://${address}:${port}`:`${req.protocol}://${req.get('host')}`;const resource=decision.mode==='direct_play'?'file':'hls';const token=createPlaybackToken({mediaId,resource,userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id,options:{copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight}},resource==='file'?600:3600);const subtitle=row.subtitle_path?createPlaybackToken({mediaId,resource:'subtitle',userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id},3600):'';res.json({decision,technical:mediaCapabilitiesFromRow(row),urls:{playback:`${base}/api/playback/${mediaId}/${resource==='file'?'file':'hls/index.m3u8'}?token=${encodeURIComponent(token)}`,subtitle:subtitle?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitle)}`:''}})});
-apiRouter.put('/device/media/:id/progress',requireDevice,(req,res)=>{const position=Math.max(0,Number(req.body?.position)||0);const duration=Math.max(0,Number(req.body?.duration)||0);const completed=duration>0&&position/duration>=.92?1:0;db.prepare(`INSERT INTO progress(user_id,media_id,position,duration,completed,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id,media_id) DO UPDATE SET position=excluded.position,duration=excluded.duration,completed=excluded.completed,updated_at=CURRENT_TIMESTAMP`).run(req.playbackDevice!.userId,Number(req.params.id),position,duration,completed);res.json({position,duration,completed:Boolean(completed)})});
+apiRouter.post('/device/media/:id/session',requireDevice,async(req,res,next)=>{try{
+  const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;
+  if(!profile)return res.status(403).json({error:'Het gekoppelde profiel bestaat niet meer.'});
+  const result=await beginPlaybackOnDevice({
+    userId:req.playbackDevice!.userId,
+    admin:profile.role==='admin',
+    maxContentRating:profile.maxRating,
+    mediaId:Number(req.params.id),
+    deviceId:req.playbackDevice!.id,
+    startPosition:Number(req.body?.startPosition)||0,
+    quality:(req.body?.quality||'auto') as QualityId,
+    controllerId:`device:${req.playbackDevice!.id}`,
+    availableBandwidthMbps:Number(req.body?.availableBandwidthMbps)||undefined,
+    dispatchLoad:false,
+  });
+  broadcastPlaybackSession(result.session);
+  res.status(201).json(result);
+}catch(error){next(error)}});
+apiRouter.post('/device/media/:id/decision',requireDevice,(req,res)=>{const mediaId=Number(req.params.id);const row=db.prepare('SELECT * FROM media_items WHERE id=?').get(mediaId) as any;if(!row)return res.status(404).json({error:'Media niet gevonden.'});const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;if(!profile||!ratingAllowed(row.content_rating,profile.maxRating,profile.role==='admin'))return res.status(403).json({error:'Dit profiel mag deze media niet afspelen.'});const capabilities=deviceCapabilities(req.playbackDevice!.id);if(!capabilities)return res.status(403).json({error:'Apparaatprofiel ontbreekt.'});const base=lanPlaybackBaseUrl();if(!base)return res.status(409).json({error:'De priv\u00e9-LAN-streamserver is niet actief. Start ThuisHub opnieuw nadat je thuisnetwerkstreaming hebt ingesteld.'});const decision=decisionEngine({media:mediaCapabilitiesFromRow(row),device:capabilities,quality:(req.body?.quality||'auto') as QualityId,availableBandwidthMbps:Number(req.body?.availableBandwidthMbps)||undefined,network:'lan'});const resource=decision.mode==='direct_play'?'file':'hls';const token=createPlaybackToken({mediaId,resource,userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id,options:{copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight}},resource==='file'?600:3600);const subtitle=row.subtitle_path?createPlaybackToken({mediaId,resource:'subtitle',userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id},3600):'';res.json({decision,technical:mediaCapabilitiesFromRow(row),urls:{playback:`${base}/api/playback/${mediaId}/${resource==='file'?'file':'hls/index.m3u8'}?token=${encodeURIComponent(token)}`,subtitle:subtitle?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitle)}`:''}})});
+apiRouter.put('/device/media/:id/progress',requireDevice,async(req,res)=>{
+  const position=Math.max(0,Number(req.body?.position)||0);const duration=Math.max(0,Number(req.body?.duration)||0);const sessionId=String(req.body?.sessionId||'');
+  if(sessionId){
+    const current=getPlaybackSession(sessionId,req.playbackDevice!.userId);
+    if(!current||current.deviceId!==req.playbackDevice!.id||current.mediaId!==Number(req.params.id))return res.status(409).json({error:'Deze voortgang hoort niet bij de actieve afspeelsessie.'});
+    if(current.endedAt)return res.json({position:current.position,duration:current.duration,completed:current.duration>0&&current.position/current.duration>=.92,revision:current.revision,stopped:true});
+    const terminalState=String(req.body?.state);
+    if(terminalState==='stopped'||terminalState==='error'){
+      if(isPendingPlaybackTransfer(current)){
+        const rolledBack=await abortPlaybackTransfer(current,terminalState==='error'?'receiver-error':'receiver-stopped');
+        broadcastPlaybackSession(rolledBack.activeSession);
+        return res.json({position:rolledBack.session.position,duration:rolledBack.session.duration,completed:false,revision:rolledBack.session.revision,stopped:true,rolledBack:true});
+      }
+      const stopped=stopPlaybackSession({id:current.id,userId:current.userId,revision:current.revision,position,duration,reason:terminalState==='error'?'receiver-error':'receiver-stopped'});
+      broadcastPlaybackSession(stopped);
+      return res.json({position:stopped.position,duration:stopped.duration,completed:stopped.duration>0&&stopped.position/stopped.duration>=.92,revision:stopped.revision,stopped:true});
+    }
+    const state=['playing','paused','buffering'].includes(String(req.body?.state))?req.body.state:current.state;
+    let session=updatePlaybackSession({id:current.id,userId:current.userId,revision:current.revision,state,position,duration});
+    if(state==='playing')session=await finalizePlaybackTransfer(session);
+    broadcastPlaybackSession(session);
+    return res.json({position:session.position,duration:session.duration,completed:session.duration>0&&session.position/session.duration>=.92,revision:session.revision});
+  }
+  const pendingDeviceSession=listActivePlaybackSessions(req.playbackDevice!.userId).find(session=>session.deviceId===req.playbackDevice!.id&&session.mediaId===Number(req.params.id)&&isPendingPlaybackTransfer(session));
+  if(pendingDeviceSession)return res.status(409).json({error:'Stuur de sessiesleutel mee zolang deze ontvanger op een afspeeloverdracht wacht.',code:'PLAYBACK_SESSION_ID_REQUIRED'});
+  const completed=duration>0&&position/duration>=.92?1:0;db.prepare(`INSERT INTO progress(user_id,media_id,position,duration,completed,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id,media_id) DO UPDATE SET position=excluded.position,duration=excluded.duration,completed=excluded.completed,updated_at=CURRENT_TIMESTAMP`).run(req.playbackDevice!.userId,Number(req.params.id),position,duration,completed);res.json({position,duration,completed:Boolean(completed)});
+});
 apiRouter.use(requireAuth);
 
 const ratingLevels:Record<string,number>={ALL:99,AL:0,G:0,TV_Y:0,TV_G:0,'6':6,PG:8,TV_PG:9,'9':9,'12':12,PG_13:13,'14':14,TV_14:14,'16':16,R:16,NC_17:18,'18':18,TV_MA:18};
 function ratingAllowed(rating:string|null,max:string|undefined,admin:boolean){if(admin||!max||max==='ALL')return true;if(!rating||rating==='ONBEKEND')return false;const normalize=(x:string)=>x.toUpperCase().replace(/[- ]/g,'_');return(ratingLevels[normalize(rating)]??99)<=(ratingLevels[normalize(max)]??99)}
+
+function playbackTarget(deviceId:string,userId:number){
+  if(deviceId==='local-browser'||/^local-browser:[a-zA-Z0-9_-]{8,80}$/.test(deviceId))return{device:null,protocol:'local-browser',capabilities:BROWSER_CAPABILITIES,needsLan:false};
+  if(deviceId==='google-cast')return{device:null,protocol:'google-cast',capabilities:CAST_CAPABILITIES,needsLan:true};
+  const device=playbackDeviceRegistry.getForUser(deviceId,userId);
+  if(!device||!device.online)return null;
+  if(device.requiresPairing&&!device.trusted)return null;
+  return{device,protocol:device.protocol,capabilities:device.capabilities,needsLan:device.protocol!=='local-browser'};
+}
+
+function playbackUrls(base:string,mediaId:number,sessionId:string,decision:any,hasSubtitle:boolean){
+  const resource=decision.mode==='direct_play'?'file':'hls';
+  const options={copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight};
+  const playback=createPlaybackGrant({sessionId,resource,options},600);
+  const subtitle=hasSubtitle?createPlaybackGrant({sessionId,resource:'subtitle'},600):'';
+  const artwork=createPlaybackGrant({sessionId,resource:'artwork'},600);
+  return{playback:`${base}/api/playback/${mediaId}/${resource==='file'?'file':'hls/index.m3u8'}?token=${encodeURIComponent(playback)}`,subtitle:subtitle?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitle)}`:'',artwork:`${base}/api/playback/${mediaId}/artwork?token=${encodeURIComponent(artwork)}`,expiresInSeconds:600,slidingWhileSessionActive:true};
+}
+
+function dlnaController(deviceId:string){
+  const device=playbackDeviceRegistry.get(deviceId);
+  const services=device?.metadata?.services as DlnaControllerTarget['services']|undefined;
+  if(!device?.address||!services?.avTransport)throw Object.assign(new Error('De DLNA-bedieningsgegevens van dit apparaat ontbreken.'),{status:409});
+  return new DlnaController({address:device.address,services});
+}
+
+function dlnaMetadata(title:string,artworkUrl:string){
+  const escape=(value:string)=>value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char]!));
+  return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="0" restricted="1"><dc:title>${escape(title)}</dc:title><upnp:class>object.item.videoItem</upnp:class>${artworkUrl?`<upnp:albumArtURI>${escape(artworkUrl)}</upnp:albumArtURI>`:''}</item></DIDL-Lite>`;
+}
+
+function sessionPresentation(session:any,row:any,target:any,urls:any){
+  const nextId=adjacentEpisodeId(Number(row.id),'next');
+  const previousId=adjacentEpisodeId(Number(row.id),'previous');
+  return{
+    session:{...session,...sessionControlPresentation(session),canSkipNext:target.protocol!=='local-browser'&&Boolean(nextId),canSkipPrevious:target.protocol!=='local-browser'&&Boolean(previousId),canChangeQuality:target.protocol!=='local-browser',canChangeSubtitleTrack:target.protocol==='google-cast'&&Boolean(row.subtitle_path),subtitleTracks:row.subtitle_path?[{id:'external-subtitle',label:'Ondertiteling',language:'nl'}]:[]},
+    media:{id:Number(row.id),kind:row.kind,title:row.title,seriesTitle:row.series_title||undefined,season:row.season||undefined,episode:row.episode||undefined,year:row.year||undefined,videoCodec:row.video_codec||undefined,duration:Number(row.duration)||0},
+    urls,
+    navigation:{nextMediaId:nextId,previousMediaId:previousId},
+  };
+}
+
+function sessionControlPresentation(session:any){
+  const presentation:Record<string,unknown>={};
+  if(Number.isFinite(Number(session?.metadata?.volume)))presentation.volume=Math.max(0,Math.min(1,Number(session.metadata.volume)));
+  if(Object.prototype.hasOwnProperty.call(session?.metadata||{},'activeSubtitleTrackId'))presentation.activeSubtitleTrackId=session.metadata.activeSubtitleTrackId;
+  return presentation;
+}
+
+async function beginPlaybackOnDevice(input:{userId:number;admin:boolean;maxContentRating?:string;mediaId:number;deviceId:string;startPosition?:number;quality?:QualityId;controllerId?:string;localBase?:string;customMaxBitrateMbps?:number;availableBandwidthMbps?:number;forceSdr?:boolean;dispatchLoad?:boolean;atomicHandoff?:boolean;handoffFromSessionId?:string;allowSameDeviceHandoff?:boolean}){
+  const row=db.prepare('SELECT * FROM media_items WHERE id=?').get(input.mediaId) as any;
+  if(!row)throw Object.assign(new Error('Media niet gevonden.'),{status:404});
+  if(!ratingAllowed(row.content_rating,input.maxContentRating,input.admin))throw Object.assign(new Error('Dit profiel mag deze media niet afspelen.'),{status:403});
+  const target=playbackTarget(input.deviceId,input.userId);
+  if(!target)throw Object.assign(new Error('Afspeelapparaat niet gevonden, offline of nog niet gekoppeld.'),{status:404});
+  const base=target.needsLan?lanPlaybackBaseUrl():input.localBase;
+  if(!base)throw Object.assign(new Error('De privé-LAN-streamserver is niet actief. Kies een geldig LAN-adres en start ThuisHub opnieuw.'),{status:409,localStreamingRequired:true});
+  const quality=QUALITY_PROFILES.some(item=>item.id===input.quality)?input.quality!:'auto';
+  const decision=decisionEngine({media:mediaCapabilitiesFromRow(row),device:target.capabilities,quality,customMaxBitrateMbps:input.customMaxBitrateMbps,availableBandwidthMbps:input.availableBandwidthMbps,network:target.needsLan?'lan':'unknown',forceSdr:Boolean(input.forceSdr)});
+  const activeBefore=listActivePlaybackSessions(input.userId);
+  const resolvedHandoffSource=input.atomicHandoff===false?null:resolvePlaybackHandoffSource(input.userId,input.deviceId);
+  const sameCastSource=input.atomicHandoff===false||target.protocol!=='google-cast'?null:activeBefore.find(item=>item.deviceId===input.deviceId&&item.protocol==='google-cast'&&!item.endedAt&&!playbackTransferSourceId(item));
+  const handoffSourceId=input.handoffFromSessionId||resolvedHandoffSource?.id||sameCastSource?.id;
+  const metadata:Record<string,unknown>={quality,title:row.title};
+  if(target.protocol==='google-cast'&&row.subtitle_path)metadata.activeSubtitleTrackId='external-subtitle';
+  let session=createPlaybackSession({userId:input.userId,mediaId:input.mediaId,deviceId:input.deviceId,protocol:target.protocol,startPosition:Math.max(0,Number(input.startPosition)||0),duration:Number(row.duration)||0,state:'connecting',controllerId:String(input.controllerId||'web').slice(0,200),playbackMode:decision.mode,metadata,handoffFromSessionId:handoffSourceId,allowSameDeviceHandoff:input.allowSameDeviceHandoff||Boolean(sameCastSource)});
+  if(isPendingPlaybackTransfer(session))armPlaybackTransferTimeout(session);
+  for(const replaced of activeBefore){
+    if(replaced.id!==handoffSourceId&&playbackTransferSourceId(replaced)){
+      disarmPlaybackTransferTimeout(replaced.id);
+      await stopPlaybackReceiver(replaced,'transfer-replaced');
+    }
+  }
+  const failNewSession=async(reason:string)=>{
+    if(isPendingPlaybackTransfer(session))await abortPlaybackTransfer(session,reason);
+    else if(!getPlaybackSession(session.id,input.userId)?.endedAt)stopPlaybackSession({id:session.id,userId:input.userId,reason});
+  };
+  let urls:ReturnType<typeof playbackUrls>;
+  try{urls=playbackUrls(base,input.mediaId,session.id,decision,Boolean(row.subtitle_path))}
+  catch(error){await failNewSession('load-failed');throw error}
+  if((target.protocol==='thuishub-tv-app'||target.protocol==='android-tv'||target.protocol==='samsung-tizen')&&input.dispatchLoad!==false){
+    try{dispatchDeviceCommand(input.deviceId,'load',{sessionId:session.id,mediaId:input.mediaId,title:row.title,position:session.position,urls,decision})}
+    catch(error){await failNewSession('load-failed');throw error}
+  }else if(target.protocol==='dlna-upnp'){
+    try{
+      const started=await startConfirmedDlnaPlayback({
+        controller:dlnaController(input.deviceId),
+        session,
+        uri:urls.playback,
+        metadata:dlnaMetadata(row.title,urls.artwork),
+      });
+      session=started.session;
+    }catch(error){throw Object.assign(new Error(`De DLNA-tv kon het afspelen niet starten: ${error instanceof Error?error.message:String(error)}`),{status:502})}
+  }
+  return{...sessionPresentation(session,row,target,urls),decision,technical:{...mediaCapabilitiesFromRow(row),fileSize:row.size,duration:row.duration},device:target.device||{id:input.deviceId,name:target.protocol==='google-cast'?'Google Cast':'Deze browser',protocol:target.protocol}};
+}
 
 apiRouter.get('/bootstrap', (req, res) => {
   const sources = db.prepare('SELECT id, name, path, kind, created_at createdAt FROM sources ORDER BY name').all();
@@ -56,30 +210,202 @@ apiRouter.get('/bootstrap', (req, res) => {
 });
 
 apiRouter.get('/playback/quality-profiles',(_req,res)=>res.json(QUALITY_PROFILES));
-apiRouter.get('/network/interfaces',requireAdmin,(_req,res)=>res.json({addresses:assignedPrivateAddresses(),selected:getSetting('localStreamingAddress',''),port:Number(getSetting('localStreamingPort','8788')),restartRequired:true}));
+apiRouter.get('/network/interfaces',requireAdmin,(_req,res)=>res.json({addresses:assignedPrivateAddresses(),selected:getSetting('localStreamingAddress',''),port:Number(getSetting('localStreamingPort','8788')),restartRequired:true,streaming:lanStreamingStatus()}));
+apiRouter.get('/playback-devices',(req,res)=>res.json({items:playbackDeviceRegistry.list(req.user!.id),diagnostics:playbackDiscoveryDiagnostics()}));
+apiRouter.post('/playback-devices/discover',async(_req,res,next)=>{try{res.json(await discoverPlaybackDevices('manual'))}catch(error){next(error)}});
+apiRouter.get('/playback-devices/diagnostics',requireAdmin,(_req,res)=>res.json({...playbackDiscoveryDiagnostics(),streaming:lanStreamingStatus()}));
+apiRouter.post('/playback-devices/diagnostics/run',requireAdmin,async(_req,res,next)=>{try{const discovery=await discoverPlaybackDevices('manual');const streaming=lanStreamingStatus();const dlna=await runDiscoveryDiagnostics({address:streaming.address,streamingPort:streaming.port,timeoutMs:2000});let windows:any=null;if(process.platform==='win32'){const script=path.resolve('scripts','diagnose-tv-discovery.ps1');if(fs.existsSync(script))windows=await new Promise(resolve=>execFile('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-Address',streaming.address,'-Port',String(streaming.port),'-TimeoutMs','2000','-Json'],{timeout:20_000,windowsHide:true,maxBuffer:1024*1024},(error,stdout,stderr)=>{if(error)return resolve({error:String(stderr||error.message).slice(0,500)});try{resolve(JSON.parse(stdout))}catch{resolve({error:'Het Windows-diagnoserapport kon niet worden gelezen.'})}}))}res.json({checkedAt:new Date().toISOString(),discovery,streaming,dlna,windows})}catch(error){next(error)}});
+apiRouter.post('/playback-devices/cast-state',(req,res)=>{const connected=Boolean(req.body?.connected);if(!connected)return res.json({connected:false});const receiverId=String(req.body?.receiverId||'active-receiver').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,80)||'active-receiver';const device=playbackDeviceRegistry.upsertDiscovered({name:String(req.body?.name||'Google Cast').slice(0,100),protocol:'google-cast',protocolId:`cast-session:${receiverId}`,deviceType:req.body?.deviceType==='audio'?'audio':'television',manufacturer:String(req.body?.manufacturer||'Google').slice(0,100),model:String(req.body?.model||'Cast-apparaat').slice(0,100),capabilities:CAST_CAPABILITIES,icon:req.body?.deviceType==='audio'?'speaker':'cast',requiresPairing:false,metadata:{reportedBy:'official-web-sender-sdk'}});res.json({connected:true,device})});
+apiRouter.get('/playback-sessions/active',async(req,res,next)=>{try{
+  let session=getActivePlaybackSession(req.user!.id);
+  if(!session)return res.json({session:null});
+  if(session.protocol==='dlna-upnp'&&!session.endedAt){
+    try{
+      const [position,transport]=await Promise.all([dlnaController(session.deviceId).getPosition(),dlnaController(session.deviceId).getTransportInfo()]);
+      if(transport.state==='STOPPED'&&Date.now()-databaseTimestampMs(session.createdAt)>5000)session=stopPlaybackSession({id:session.id,userId:req.user!.id,revision:session.revision,position:position.positionSeconds,duration:position.durationSeconds||session.duration,reason:'receiver-stopped'});
+      else{const state=transport.state==='PLAYING'?'playing':transport.state==='PAUSED_PLAYBACK'?'paused':session.state;session=updatePlaybackSession({id:session.id,userId:req.user!.id,revision:session.revision,state,position:position.positionSeconds,duration:position.durationSeconds||session.duration});}
+      broadcastPlaybackSession(session);
+    }catch{/* Sommige renderers ondersteunen statuspolling niet; de actieve sessie blijft bruikbaar. */}
+  }
+  const device=session.deviceId.startsWith('local-browser')?{id:session.deviceId,name:'Deze browser',protocol:'local-browser',capabilities:BROWSER_CAPABILITIES}:playbackDeviceRegistry.get(session.deviceId);
+  const media=db.prepare('SELECT id,kind,title,series_title seriesTitle,season,episode,year,video_codec videoCodec,duration,subtitle_path subtitlePath FROM media_items WHERE id=?').get(session.mediaId) as any;
+  const nextId=adjacentEpisodeId(session.mediaId,'next');const previousId=adjacentEpisodeId(session.mediaId,'previous');
+  res.json({session:{...session,...sessionControlPresentation(session),device,media,canSkipNext:session.protocol!=='local-browser'&&Boolean(nextId),canSkipPrevious:session.protocol!=='local-browser'&&Boolean(previousId),canChangeQuality:session.protocol!=='local-browser',canChangeSubtitleTrack:session.protocol==='google-cast'&&Boolean(media?.subtitlePath),subtitleTracks:media?.subtitlePath?[{id:'external-subtitle',label:'Ondertiteling',language:'nl'}]:[]}});
+}catch(error){next(error)}});
+apiRouter.get('/playback-sessions/:id',(req,res)=>{const session=getPlaybackSession(String(req.params.id),req.user!.id);if(!session)return res.status(404).json({error:'Afspeelsessie niet gevonden.'});res.json({session})});
+apiRouter.post('/playback-sessions',async(req,res,next)=>{try{
+  const result=await beginPlaybackOnDevice({userId:req.user!.id,admin:req.user!.role==='admin',maxContentRating:req.user!.maxContentRating,mediaId:Number(req.body?.mediaId),deviceId:String(req.body?.deviceId||''),startPosition:Number(req.body?.startPosition)||0,quality:(req.body?.quality||'auto') as QualityId,controllerId:req.body?.controllerId,localBase:`${req.protocol}://${req.get('host')}`,customMaxBitrateMbps:Number(req.body?.customMaxBitrateMbps)||undefined,availableBandwidthMbps:Number(req.body?.availableBandwidthMbps)||undefined,forceSdr:Boolean(req.body?.forceSdr)});
+  broadcastPlaybackSession(result.session);
+  res.status(201).json(result);
+}catch(error){next(error)}});
+apiRouter.patch('/playback-sessions/:id',async(req,res,next)=>{try{
+  const current=getPlaybackSession(String(req.params.id),req.user!.id);
+  if(!current)return res.status(404).json({error:'Afspeelsessie niet gevonden.'});
+  if(isPendingPlaybackTransfer(current))assertPlaybackTransferControllerActionAllowed(current,'patch');
+  let session=updatePlaybackSession({id:current.id,userId:req.user!.id,revision:Number(req.body?.revision),state:req.body?.state,position:req.body?.position,duration:req.body?.duration,controllerId:req.body?.controllerId,metadata:req.body?.metadata});
+  if(session.state==='error'&&isPendingPlaybackTransfer(session)){
+    const rolledBack=await abortPlaybackTransfer(session,'receiver-error');
+    broadcastPlaybackSession(rolledBack.activeSession);
+    return res.json({session:rolledBack.session,activeSession:rolledBack.activeSession,rolledBack:true});
+  }
+  if(session.state==='error')session=stopPlaybackSession({id:session.id,userId:req.user!.id,revision:session.revision,position:session.position,duration:session.duration,reason:'receiver-error'});
+  broadcastPlaybackSession(session);res.json({session});
+}catch(error){next(error)}});
+apiRouter.post('/playback-sessions/:id/browser-command/claim',(req,res,next)=>{try{
+  const current=getPlaybackSession(String(req.params.id),req.user!.id);
+  if(!current||current.endedAt)return res.status(404).json({error:'Actieve afspeelsessie niet gevonden.'});
+  const revision=Number(req.body?.revision);
+  if(!Number.isInteger(revision)||revision!==current.revision)return res.status(409).json({error:'De afspeelsessie is ondertussen op een ander apparaat bijgewerkt.',code:'STALE_PLAYBACK_SESSION',session:current});
+  const command=current.metadata?.browserCommand as Record<string,unknown>|undefined;
+  const commandId=String(req.body?.commandId||'');
+  const claimedBy=String(req.body?.claimedBy||'');
+  if(!command||String(command.id||'')!==commandId||!commandId||commandId.length>220)return res.status(409).json({error:'Deze browseropdracht is niet meer actueel.',code:'BROWSER_COMMAND_UNAVAILABLE'});
+  if(!/^local-browser:[a-zA-Z0-9_-]{8,80}$/.test(claimedBy))return res.status(400).json({error:'De browserontvanger is ongeldig.'});
+  if(command.claimedBy&&command.claimedBy!==claimedBy)return res.status(409).json({error:'Een ander ontvangervenster voert deze opdracht al uit.',code:'BROWSER_COMMAND_CLAIMED'});
+  if(command.claimedBy===claimedBy)return res.json({session:current});
+  const session=updatePlaybackSession({id:current.id,userId:req.user!.id,revision,metadata:{...current.metadata,browserCommand:{...command,claimedBy,claimedAt:Date.now()}}});
+  broadcastPlaybackSession(session);
+  res.json({session});
+}catch(error){next(error)}});
+apiRouter.post('/playback-sessions/:id/receiver-status',async(req,res,next)=>{try{
+  const current=getPlaybackSession(String(req.params.id),req.user!.id);
+  if(!current)return res.status(404).json({error:'Afspeelsessie niet gevonden.'});
+  if(current.endedAt)return res.status(409).json({error:'Deze afspeelsessie is al gestopt.',code:'PLAYBACK_SESSION_ENDED'});
+  if(current.protocol!=='google-cast'&&current.protocol!=='local-browser')return res.status(422).json({error:'Dit type ontvanger bevestigt de status via de gekoppelde apparaatverbinding.',code:'PLAYBACK_RECEIVER_STATUS_NOT_ALLOWED'});
+  const state=String(req.body?.state||'');
+  if(state!=='playing'&&state!=='error')return res.status(400).json({error:'Receiverstatus moet playing of error zijn.',code:'INVALID_PLAYBACK_RECEIVER_STATUS'});
+  if(state==='error'){
+    if(isPendingPlaybackTransfer(current)){
+      const updated=updatePlaybackSession({id:current.id,userId:req.user!.id,revision:Number(req.body?.revision),state,position:req.body?.position,duration:req.body?.duration,controllerId:req.body?.controllerId});
+      const rolledBack=await abortPlaybackTransfer(updated,'receiver-error');
+      broadcastPlaybackSession(rolledBack.activeSession);
+      return res.json({session:rolledBack.session,activeSession:rolledBack.activeSession,rolledBack:true});
+    }
+    const session=stopPlaybackSession({id:current.id,userId:req.user!.id,revision:Number(req.body?.revision),position:req.body?.position,duration:req.body?.duration,reason:'receiver-error'});
+    broadcastPlaybackSession(session);
+    return res.json({session});
+  }
+  let session=updatePlaybackSession({id:current.id,userId:req.user!.id,revision:Number(req.body?.revision),state,position:req.body?.position,duration:req.body?.duration,controllerId:req.body?.controllerId});
+  if(isPendingPlaybackTransfer(session))session=await finalizePlaybackTransfer(session);
+  broadcastPlaybackSession(session);
+  res.json({session});
+}catch(error){next(error)}});
+apiRouter.post('/playback-sessions/:id/control',async(req,res,next)=>{try{
+  const current=getPlaybackSession(String(req.params.id),req.user!.id);
+  if(!current)return res.status(404).json({error:'Afspeelsessie niet gevonden.'});
+  if(current.endedAt)return res.status(409).json({error:'Deze afspeelsessie is al gestopt.'});
+  const action=String(req.body?.action||req.body?.command||'');
+  const allowedActions=['play','pause','seek','stop','buffer','error','next','previous','volume','audio-track','subtitle-track','quality','disconnect'];
+  if(!allowedActions.includes(action))return res.status(400).json({error:'Onbekende afspeelopdracht.'});
+  const revision=req.body?.revision===undefined?current.revision:Number(req.body.revision);
+  if(!Number.isInteger(revision)||revision!==current.revision)return res.status(409).json({error:'De afspeelsessie is ondertussen op een ander apparaat bijgewerkt.',code:'STALE_PLAYBACK_SESSION',session:current});
+  assertPlaybackTransferControllerActionAllowed(current,action);
+  const browserCommand=['google-cast','local-browser'].includes(current.protocol)&&['play','pause','seek','volume','subtitle-track'].includes(action)?{
+    id:`${current.id}:${current.revision+1}`,
+    issuedAt:Date.now(),
+    command:action,
+    payload:action==='seek'?{position:Math.max(0,Number(req.body?.position??req.body?.value)||0)}:action==='volume'?{level:Number(req.body?.value??req.body?.level)}:action==='subtitle-track'?{trackId:req.body?.trackId===null?null:String(req.body?.trackId||'')}:{},
+  }:null;
+  if(action==='next'||action==='previous'||action==='quality'){
+    if(current.protocol==='local-browser')return res.status(422).json({error:'Gebruik voor de lokale browser de afspeelknoppen in de bibliotheek.'});
+    const mediaId=action==='quality'?current.mediaId:adjacentEpisodeId(current.mediaId,action);
+    if(!mediaId)return res.status(409).json({error:action==='next'?'Er is geen volgende aflevering beschikbaar.':'Er is geen vorige aflevering beschikbaar.'});
+    const browserReplacement=current.protocol==='google-cast';
+    const result=await beginPlaybackOnDevice({userId:req.user!.id,admin:req.user!.role==='admin',maxContentRating:req.user!.maxContentRating,mediaId,deviceId:current.deviceId,startPosition:action==='quality'?current.position:0,quality:(action==='quality'?req.body?.quality:current.metadata.quality||'auto') as QualityId,controllerId:current.controllerId||'web',atomicHandoff:true,handoffFromSessionId:current.id,allowSameDeviceHandoff:true});
+    if(browserReplacement){
+      const replaceCommand={
+        id:`${result.session.id}:${result.session.revision+1}`,
+        issuedAt:Date.now(),
+        command:'replace-media',
+        payload:{media:result.media,urls:result.urls,decision:result.decision,startPosition:result.session.position},
+      };
+      const updated=updatePlaybackSession({id:result.session.id,userId:req.user!.id,revision:result.session.revision,metadata:{...result.session.metadata,browserCommand:replaceCommand}});
+      result.session={...result.session,...updated};
+    }
+    broadcastPlaybackSession(result.session);
+    return res.json(result);
+  }
+  const stateActions=['play','pause','seek','stop','buffer','error'];
+  if(isPendingPlaybackTransfer(current)&&['stop','error','disconnect'].includes(action)){
+    const rolledBack=await abortPlaybackTransfer(current,action==='error'?'receiver-error':'transfer-cancelled');
+    if(action==='error'){
+      broadcastPlaybackSession(rolledBack.activeSession);
+      return res.json({session:rolledBack.session,activeSession:rolledBack.activeSession,rolledBack:true});
+    }
+    let stoppedSource=rolledBack.activeSession;
+    if(stoppedSource&&!stoppedSource.endedAt){
+      await stopPlaybackReceiver(stoppedSource,action);
+      stoppedSource=stopPlaybackSession({id:stoppedSource.id,userId:req.user!.id,revision:stoppedSource.revision,position:stoppedSource.position,duration:stoppedSource.duration,reason:action});
+    }
+    broadcastPlaybackSession(null);
+    return res.json({session:rolledBack.session,activeSession:null,sourceSession:stoppedSource,rolledBack:true});
+  }
+  if(action==='error'){
+    const session=stopPlaybackSession({id:current.id,userId:req.user!.id,revision,position:req.body?.position,duration:req.body?.duration,reason:'receiver-error'});
+    broadcastPlaybackSession(session);
+    return res.json({session});
+  }
+  let metadataUpdate:Record<string,unknown>|null=null;
+  if(action==='volume'){
+    const volume=Number(req.body?.value??req.body?.level);
+    if(!Number.isFinite(volume)||volume<0||volume>1)return res.status(400).json({error:'Volume moet een getal tussen 0 en 1 zijn.'});
+    metadataUpdate={...current.metadata,volume,...(browserCommand?{browserCommand}:{})};
+  }else if(action==='subtitle-track'){
+    const trackId=req.body?.trackId===null||req.body?.trackId===''?null:String(req.body?.trackId||'');
+    if(trackId!==null&&trackId!=='external-subtitle')return res.status(400).json({error:'Onbekend ondertitelspoor.'});
+    const hasSubtitle=Boolean((db.prepare('SELECT subtitle_path subtitlePath FROM media_items WHERE id=?').get(current.mediaId) as any)?.subtitlePath);
+    if(trackId&&!hasSubtitle)return res.status(422).json({error:'Voor deze media is geen extern ondertitelspoor beschikbaar.'});
+    metadataUpdate={...current.metadata,activeSubtitleTrackId:trackId,...(browserCommand?{browserCommand}:{})};
+  }
+  if(current.protocol==='dlna-upnp'){
+    const controller=dlnaController(current.deviceId);
+    if(action==='play')await controller.play();
+    else if(action==='pause')await controller.pause();
+    else if(action==='stop')await controller.stop();
+    else if(action==='seek')await controller.seek(Number(req.body?.position??req.body?.value)||0);
+    else if(action==='volume')await controller.setVolume(Number(req.body?.value));
+    else return res.status(422).json({error:'Dit DLNA-apparaat ondersteunt deze opdracht niet via ThuisHub.'});
+  }else if(current.protocol!=='google-cast'&&current.protocol!=='local-browser'&&!['buffer','error'].includes(action)){
+    dispatchDeviceCommand(current.deviceId,action,{sessionId:current.id,position:req.body?.position,positionSeconds:req.body?.position,value:req.body?.value,level:req.body?.value,quality:req.body?.quality,trackId:req.body?.trackId});
+  }
+  if(!stateActions.includes(action)){
+    const session=metadataUpdate?updatePlaybackSession({id:current.id,userId:req.user!.id,revision,metadata:metadataUpdate}):current;
+    broadcastPlaybackSession(session);return res.json({session:{...session,...sessionControlPresentation(session)}})
+  }
+  let session=controlPlaybackSession({id:current.id,userId:req.user!.id,revision,action:action as any,position:req.body?.position,duration:req.body?.duration,controllerId:req.body?.controllerId,reason:req.body?.reason,metadata:browserCommand?{...current.metadata,browserCommand}:undefined});
+  if(action==='play')session=await finalizePlaybackTransfer(session);
+  broadcastPlaybackSession(session);
+  res.json({session:{...session,...sessionControlPresentation(session)}});
+}catch(error){next(error)}});
+apiRouter.post('/playback-sessions/:id/renew',(req,res,next)=>{try{const session=getPlaybackSession(String(req.params.id),req.user!.id);if(!session||session.endedAt)return res.status(404).json({error:'Actieve afspeelsessie niet gevonden.'});const token=String(req.body?.token||'');if(!token)return res.status(400).json({error:'De huidige afspeelgrant ontbreekt.'});res.json({token:renewPlaybackGrant(token,session.id,req.user!.id,Number(req.body?.ttlSeconds)||600)})}catch(error){next(error)}});
+apiRouter.delete('/playback-sessions/:id',async(req,res,next)=>{try{const current=getPlaybackSession(String(req.params.id),req.user!.id);if(!current)return res.status(404).json({error:'Afspeelsessie niet gevonden.'});if(current.endedAt){const activeSession=getActivePlaybackSession(req.user!.id);broadcastPlaybackSession(activeSession);return res.json({session:current,activeSession})}const reason=String(req.body?.reason||'transfer-cancelled');if(isPendingPlaybackTransfer(current)){const rolledBack=await abortPlaybackTransfer(current,reason);if(reason==='disconnect'||reason==='stop'){let stoppedSource=rolledBack.activeSession;if(stoppedSource&&!stoppedSource.endedAt){await stopPlaybackReceiver(stoppedSource,reason);stoppedSource=stopPlaybackSession({id:stoppedSource.id,userId:req.user!.id,revision:stoppedSource.revision,position:stoppedSource.position,duration:stoppedSource.duration,reason})}broadcastPlaybackSession(null);return res.json({session:rolledBack.session,activeSession:null,sourceSession:stoppedSource,rolledBack:true})}broadcastPlaybackSession(rolledBack.activeSession);return res.json({session:rolledBack.session,activeSession:rolledBack.activeSession,rolledBack:true})}if(current.protocol==='dlna-upnp')await dlnaController(current.deviceId).stop().catch(()=>undefined);else if(current.protocol!=='google-cast'&&current.protocol!=='local-browser')dispatchDeviceCommand(current.deviceId,'stop',{sessionId:current.id});const session=stopPlaybackSession({id:current.id,userId:req.user!.id,revision:req.body?.revision===undefined?undefined:Number(req.body.revision),position:req.body?.position,duration:req.body?.duration,reason:reason==='transfer-cancelled'?'disconnect':reason});broadcastPlaybackSession(session);res.json({session})}catch(error){next(error)}});
 apiRouter.post('/playback/:id/decision',async(req,res,next)=>{try{
   const mediaId=Number(req.params.id);const row=db.prepare('SELECT * FROM media_items WHERE id=?').get(mediaId) as any;
   if(!row)return res.status(404).json({error:'Media niet gevonden.'});
+  if(!ratingAllowed(row.content_rating,req.user!.maxContentRating,req.user!.role==='admin'))return res.status(403).json({error:'Dit profiel mag deze media niet afspelen.'});
   const requestedDeviceId=typeof req.body?.deviceId==='string'?req.body.deviceId:'';
   const supplied=req.body?.capabilities as DeviceCapabilities|undefined;
-  const capabilities=requestedDeviceId?deviceCapabilities(requestedDeviceId):supplied||(req.body?.target==='cast'?CAST_CAPABILITIES:BROWSER_CAPABILITIES);
+  const registeredTarget=requestedDeviceId?playbackTarget(requestedDeviceId,req.user!.id):null;
+  const registered=registeredTarget?.device||null;
+  const capabilities=requestedDeviceId?registeredTarget?.capabilities:supplied||(req.body?.target==='cast'?CAST_CAPABILITIES:BROWSER_CAPABILITIES);
   if(!capabilities)return res.status(404).json({error:'Afspeelapparaat niet gevonden of niet gekoppeld.'});
   const network=(['lan','tailscale','mobile','unknown'].includes(req.body?.network)?req.body.network:'unknown') as any;
   const decision=decisionEngine({media:mediaCapabilitiesFromRow(row),device:capabilities,quality:(req.body?.quality||'auto') as QualityId,customMaxBitrateMbps:Number(req.body?.customMaxBitrateMbps)||undefined,availableBandwidthMbps:Number(req.body?.availableBandwidthMbps)||undefined,network,forceSdr:Boolean(req.body?.forceSdr)});
-  const localEnabled=getSetting('localStreamingEnabled','false')==='true';const localAddress=getSetting('localStreamingAddress','');const localPort=Number(getSetting('localStreamingPort','8788'));
-  const needsLan=['cast','android-tv','google-tv','tizen','dlna'].includes(String(capabilities.platform||''));
-  const base=needsLan&&localEnabled&&localAddress?`http://${localAddress}:${localPort}`:`${req.protocol}://${req.get('host')}`;
+  const needsLan=Boolean(registered&&registered.protocol!=='local-browser')||['cast','android-tv','google-tv','tizen','dlna'].includes(String(capabilities.platform||''));
+  const lanBase=needsLan?lanPlaybackBaseUrl():null;
+  if(needsLan&&!lanBase)return res.status(409).json({error:'De priv\u00e9-LAN-streamserver is niet actief. Kies een geldig LAN-adres, schakel thuisnetwerkstreaming in en start ThuisHub opnieuw.',localStreamingRequired:true});
+  const base=lanBase||`${req.protocol}://${req.get('host')}`;
   const fileToken=createPlaybackToken({mediaId,resource:'file',userId:req.user!.id,deviceId:requestedDeviceId||undefined},600);
   const hlsToken=createPlaybackToken({mediaId,resource:'hls',userId:req.user!.id,deviceId:requestedDeviceId||undefined,options:{copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight}},3600);
   const subtitleToken=row.subtitle_path?createPlaybackToken({mediaId,resource:'subtitle',userId:req.user!.id,deviceId:requestedDeviceId||undefined},3600):'';
-  res.json({decision,technical:{...mediaCapabilitiesFromRow(row),fileSize:row.size,duration:row.duration},urls:{playback:decision.mode==='direct_play'?`${base}/api/playback/${mediaId}/file?token=${encodeURIComponent(fileToken)}`:`${base}/api/playback/${mediaId}/hls/index.m3u8?token=${encodeURIComponent(hlsToken)}`,subtitle:subtitleToken?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitleToken)}`:'',expiresInSeconds:decision.mode==='direct_play'?600:3600},device:capabilities,localStreamingRequired:needsLan&&!localEnabled});
+  res.json({decision,technical:{...mediaCapabilitiesFromRow(row),fileSize:row.size,duration:row.duration},urls:{playback:decision.mode==='direct_play'?`${base}/api/playback/${mediaId}/file?token=${encodeURIComponent(fileToken)}`:`${base}/api/playback/${mediaId}/hls/index.m3u8?token=${encodeURIComponent(hlsToken)}`,subtitle:subtitleToken?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitleToken)}`:'',expiresInSeconds:decision.mode==='direct_play'?600:3600},device:capabilities,localStreamingRequired:false});
 }catch(error){next(error)}});
 
 apiRouter.get('/devices',requireAdmin,(_req,res)=>res.json({items:listDevices()}));
-apiRouter.post('/devices/pair/approve',requireAdmin,(req,res)=>{const ok=approvePairing(String(req.body?.code||''),req.user!.id);res.status(ok?200:400).json(ok?{message:'Afspeelapparaat gekoppeld aan dit profiel.'}:{error:'De koppelcode is ongeldig of verlopen.'})});
+apiRouter.post('/devices/pair/approve',requireAdmin,pairingRateLimit(10),(req,res)=>{const ok=approvePairing(String(req.body?.code||''),req.user!.id);res.status(ok?200:400).json(ok?{message:'Afspeelapparaat gekoppeld aan dit profiel.'}:{error:'De koppelcode is ongeldig of verlopen.'})});
 apiRouter.patch('/devices/:id',requireAdmin,(req,res)=>res.json({ok:setDeviceOverrides(String(req.params.id),req.body?.overrides||{})}));
 apiRouter.delete('/devices/:id',requireAdmin,(req,res)=>res.json({ok:forgetDevice(String(req.params.id))}));
-apiRouter.post('/devices/:id/commands',requireAdmin,(req,res,next)=>{try{res.status(201).json({id:queueDeviceCommand(String(req.params.id),String(req.body?.command||''),req.body?.payload)})}catch(error){next(error)}});
+apiRouter.post('/devices/:id/commands',requireAdmin,(req,res,next)=>{try{res.status(201).json({id:dispatchDeviceCommand(String(req.params.id),String(req.body?.command||''),req.body?.payload)})}catch(error){next(error)}});
 
 apiRouter.get('/library', (req, res) => {
   const kind = req.query.kind === 'movie' || req.query.kind === 'episode' ? req.query.kind : null;
@@ -373,7 +699,8 @@ apiRouter.get('/folders', requireAdmin, async (req, res) => {
 apiRouter.get('/settings', requireAdmin, (_req, res) => res.json(publicSettings()));
 apiRouter.patch('/settings', requireAdmin, async (req, res, next) => {
   try {
-    const { serverName, language, autoplay, rewindOnResume, skipIntro, skipCredits, hardwareTranscoding, toneMapping, maxTranscodes, uploadLimitMbps, automaticBackups, backupRetention, backupLocation, automaticUpdateCheck, updateChannel, developmentUpdatesEnabled, maxLogStorageMb,localStreamingEnabled,localStreamingAddress,localStreamingPort,castReceiverAppId,defaultQualityLan,defaultQualityTailscale,defaultQualityMobile,defaultQualityDownload,defaultQualityLiveTv,metadataCacheDays,omdbLocalDailyLimit,metadataStrategy } = req.body || {};
+    const { serverName, language, autoplay, rewindOnResume, skipIntro, skipCredits, hardwareTranscoding, toneMapping, maxTranscodes, uploadLimitMbps, automaticBackups, backupRetention, backupLocation, automaticUpdateCheck, updateChannel, developmentUpdatesEnabled, maxLogStorageMb,localStreamingEnabled,localStreamingAddress,localStreamingPort,automaticDeviceDiscovery,dlnaDiscoveryEnabled,deviceRetentionDays,castReceiverAppId,defaultQualityLan,defaultQualityTailscale,defaultQualityMobile,defaultQualityDownload,defaultQualityLiveTv,metadataCacheDays,omdbLocalDailyLimit,metadataStrategy } = req.body || {};
+    if(localStreamingPort!==undefined&&!isValidLanStreamingPort(localStreamingPort,Number(process.env.PORT||APP_PORT)))return res.status(400).json({error:'Kies een streamingpoort tussen 1024 en 65535 die niet gelijk is aan de beheerpoort.'});
     if (typeof serverName === 'string' && serverName.trim()) setSetting('serverName', serverName.trim());
     if (typeof language === 'string' && /^[a-z]{2}-[A-Z]{2}$/.test(language)) setSetting('language', language);
     if(metadataCacheDays!==undefined)setSetting('metadataCacheDays',String(Math.min(365,Math.max(1,Number(metadataCacheDays)||14))));
@@ -396,7 +723,10 @@ apiRouter.patch('/settings', requireAdmin, async (req, res, next) => {
     if (maxLogStorageMb!==undefined) { const value=Math.min(2048,Math.max(10,Number(maxLogStorageMb)||100)); setSetting('maxLogStorageMb',String(value)); setMaxLogStorageMb(value); }
     if(typeof localStreamingEnabled==='boolean')setSetting('localStreamingEnabled',String(localStreamingEnabled));
     if(typeof localStreamingAddress==='string'&&(!localStreamingAddress||/^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)\d{1,3}\.\d{1,3}$/.test(localStreamingAddress)))setSetting('localStreamingAddress',localStreamingAddress);
-    if(localStreamingPort!==undefined)setSetting('localStreamingPort',String(Math.min(65535,Math.max(1024,Number(localStreamingPort)||8788))));
+    if(localStreamingPort!==undefined)setSetting('localStreamingPort',String(Number(localStreamingPort)));
+    if(typeof automaticDeviceDiscovery==='boolean')setSetting('automaticDeviceDiscovery',String(automaticDeviceDiscovery));
+    if(typeof dlnaDiscoveryEnabled==='boolean')setSetting('dlnaDiscoveryEnabled',String(dlnaDiscoveryEnabled));
+    if(deviceRetentionDays!==undefined)setSetting('deviceRetentionDays',String(Math.min(365,Math.max(1,Number(deviceRetentionDays)||30))));
     if(typeof castReceiverAppId==='string'&&/^[A-F0-9]{0,16}$/i.test(castReceiverAppId))setSetting('castReceiverAppId',castReceiverAppId);
     const qualityValues=QUALITY_PROFILES.map(item=>item.id);for(const[key,value]of Object.entries({defaultQualityLan,defaultQualityTailscale,defaultQualityMobile,defaultQualityDownload,defaultQualityLiveTv}))if(qualityValues.includes(value as any))setSetting(key,String(value));
     res.json(publicSettings());

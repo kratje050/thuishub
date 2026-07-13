@@ -61,6 +61,17 @@ export type DeviceCapabilities = {
   dts: boolean;
   subtitleFormats: SubtitleKind[];
   arc?: 'none' | 'arc' | 'earc' | 'unknown';
+  play?: boolean;
+  pause?: boolean;
+  stop?: boolean;
+  seek?: boolean;
+  position?: boolean;
+  volume?: boolean;
+  next?: boolean;
+  previous?: boolean;
+  audioTrackSelection?: boolean;
+  subtitleTrackSelection?: boolean;
+  qualitySelection?: boolean;
 };
 
 export type QualityId = 'auto' | 'original' | '4k-max' | '4k-high' | '4k-balanced' | '1080p-max' | '1080p-high' | '1080p-balanced' | '720p' | 'data-saver' | 'custom';
@@ -222,12 +233,16 @@ export const BROWSER_CAPABILITIES: DeviceCapabilities = {
   name: 'Moderne browser', platform: 'web', maxWidth: 3840, maxHeight: 2160, maxFrameRate: 60, maxBitrateMbps: 80,
   containers: ['mp4', 'm4v', 'webm'], videoCodecs: ['h264', 'av1', 'vp9'], maxBitDepth: 10, hdrFormats: ['sdr'], dolbyVisionProfiles: [],
   audioCodecs: ['aac', 'mp3', 'opus'], maxAudioChannels: 2, passthrough: false, atmos: false, trueHd: false, eac3: false, dts: false,
-  subtitleFormats: ['srt', 'webvtt'], arc: 'unknown'
+  subtitleFormats: ['srt', 'webvtt'], arc: 'unknown', play: true, pause: true, stop: true, seek: true, position: true, volume: true
 };
 
 export const CAST_CAPABILITIES: DeviceCapabilities = {
-  name: 'Google Cast', platform: 'cast', maxWidth: 3840, maxHeight: 2160, maxFrameRate: 60, maxBitrateMbps: 80,
-  containers: ['mp4', 'webm', 'mpegts'], videoCodecs: ['h264', 'hevc', 'vp9', 'av1'], maxBitDepth: 10,
-  hdrFormats: ['sdr', 'hdr10', 'hlg', 'dolby-vision'], dolbyVisionProfiles: [5, 8], audioCodecs: ['aac', 'ac3', 'eac3', 'opus'],
-  maxAudioChannels: 8, passthrough: true, atmos: true, trueHd: false, eac3: true, dts: false, subtitleFormats: ['webvtt'], arc: 'unknown'
+  // De Web Sender SDK meldt geen betrouwbaar hardwareprofiel. Gebruik daarom
+  // een conservatieve gemeenschappelijke basis; specifieke tv-apps rapporteren
+  // hun eigen capaciteiten en beheerders kunnen per apparaat overrides zetten.
+  name: 'Google Cast (veilig standaardprofiel)', platform: 'cast', maxWidth: 1920, maxHeight: 1080, maxFrameRate: 30, maxBitrateMbps: 20,
+  containers: ['mp4', 'webm'], videoCodecs: ['h264', 'vp8'], maxBitDepth: 8,
+  hdrFormats: ['sdr'], dolbyVisionProfiles: [], audioCodecs: ['aac', 'mp3'],
+  maxAudioChannels: 2, passthrough: false, atmos: false, trueHd: false, eac3: false, dts: false, subtitleFormats: ['webvtt'], arc: 'unknown',
+  play: true, pause: true, stop: true, seek: true, position: true, volume: true
 };
