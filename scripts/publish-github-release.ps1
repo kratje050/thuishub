@@ -22,8 +22,12 @@ try {
   $wgt = Join-Path $release "ThuisHub-Samsung-TV-$Version.wgt"; if (Test-Path $wgt) { $assets += $wgt }
   foreach ($file in $assets) { if (-not (Test-Path $file)) { throw "Publicatiebestand ontbreekt: $file" } }
   if (-not (git tag --list "v$Version")) { git tag -a "v$Version" -m "ThuisHub $Version" }
+  $previousErrorPreference = $ErrorActionPreference
+  $ErrorActionPreference = 'SilentlyContinue'
   $existingState = & $gh.Source release view "v$Version" --repo $repo --json isDraft --jq .isDraft 2>$null
-  $releaseExists = $LASTEXITCODE -eq 0
+  $releaseViewExitCode = $LASTEXITCODE
+  $ErrorActionPreference = $previousErrorPreference
+  $releaseExists = $releaseViewExitCode -eq 0
   if ($releaseExists) {
     if ("$existingState".Trim().ToLowerInvariant() -ne 'true') { throw "Release v$Version is al gepubliceerd; gepubliceerde releases worden nooit overschreven." }
     Write-Host "Conceptrelease v$Version bestaat al; assets worden niet automatisch overschreven." -ForegroundColor Yellow
