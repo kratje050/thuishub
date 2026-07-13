@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { api, patch, post, put, type Bootstrap, type MediaItem, type ScanState, type Settings, type Source, type User } from './api';
 import ServerDashboard from './ServerDashboard';
+import { CastButton, CastRemote } from './TvPlayback';
 
 type View = 'home' | 'movies' | 'series' | 'music' | 'photos' | 'live' | 'watchlist' | 'dashboard' | 'settings';
 type MusicTrack={id:number;title:string;artist:string;album:string;albumArtist?:string;track?:number;disc?:number;year?:number;duration?:number;coverUrl?:string;genres:string[]};
@@ -83,7 +84,7 @@ function formatDuration(seconds: number) {
 function Player({ item, settings, onClose, onProgress, onFinished }: { item: MediaItem; settings: Settings; onClose: () => void; onProgress: (id: number, progress: MediaItem['progress']) => void; onFinished: () => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState('');
-  const [transcoding, setTranscoding] = useState(!item.directPlay);
+  const [transcoding, setTranscoding] = useState(false);
   const hlsRef = useRef<Hls | null>(null);
   const lastSaved = useRef(0);
   const sessionId = useRef(crypto.randomUUID());
@@ -91,6 +92,9 @@ function Player({ item, settings, onClose, onProgress, onFinished }: { item: Med
   const [markers, setMarkers] = useState<{id:number;type:'intro'|'credits'|'commercial';startTime:number;endTime:number}[]>([]);
   const [activeMarker, setActiveMarker] = useState<typeof markers[number] | null>(null);
   const [speed, setSpeed] = useState(1);
+  const [quality,setQuality]=useState(settings.defaultQualityLan||'auto');
+  const [playbackInfo,setPlaybackInfo]=useState<any>(null);
+  const [showTechnical,setShowTechnical]=useState(false);
 
   const save = useCallback((state: 'playing'|'paused'|'stopped' = 'playing') => {
     const video = videoRef.current;
@@ -100,30 +104,29 @@ function Player({ item, settings, onClose, onProgress, onFinished }: { item: Med
     void put<MediaItem['progress']>(`/media/${item.id}/progress`, payload).then(progress => onProgress(item.id, progress)).catch(() => {});
   }, [item.id, onProgress, transcoding]);
 
-  const useHls = useCallback(() => {
+  const useHls = useCallback((source:string,mode:string) => {
     const video = videoRef.current;
     if (!video) return;
-    setError(''); setTranscoding(true);
-    const source = `/api/media/${item.id}/hls/index.m3u8`;
+    setError(''); setTranscoding(mode==='transcode');
     if (Hls.isSupported()) {
       hlsRef.current?.destroy();
       const hls = new Hls({ maxBufferLength: 30, manifestLoadingMaxRetry: 4 });
       hlsRef.current = hls;
       hls.loadSource(source); hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => { setTranscoding(false); video.play().catch(() => {}); });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
       hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) setError('Deze video kon niet worden omgezet. Controleer het bestand en probeer opnieuw.'); });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = source; }
-  }, [item.id]);
+  }, []);
 
   useEffect(() => {
-    const video = videoRef.current!;
-    if (item.directPlay) video.src = `/api/media/${item.id}/stream`;
-    else useHls();
+    const video = videoRef.current!;let cancelled=false;
+    hlsRef.current?.destroy();setError('');
+    void post<any>(`/playback/${item.id}/decision`,{quality,network:'lan'}).then(result=>{if(cancelled)return;setPlaybackInfo(result);setTranscoding(result.decision.mode==='transcode');if(result.decision.mode==='direct_play')video.src=result.urls.playback;else useHls(result.urls.playback,result.decision.mode)}).catch(e=>setError(e.message));
     const restore = () => { if (item.progress?.position && item.progress.position < video.duration * .92) video.currentTime = Math.max(0, item.progress.position - settings.rewindOnResume); };
     const timer = window.setInterval(() => { if (!video.paused && Date.now() - lastSaved.current > 8000) save(); }, 3000);
     video.addEventListener('loadedmetadata', restore, { once: true });
-    return () => { window.clearInterval(timer); save('stopped'); hlsRef.current?.destroy(); };
-  }, [item.id]);
+    return () => { cancelled=true;window.clearInterval(timer); save('stopped'); hlsRef.current?.destroy();video.removeAttribute('src');video.load(); };
+  }, [item.id,quality]);
 
   useEffect(()=>{void api<typeof markers>(`/media/${item.id}/markers`).then(setMarkers);},[item.id]);
   useEffect(()=>{const video=videoRef.current;if(!video)return;const track=()=>setActiveMarker(markers.find(marker=>video.currentTime>=marker.startTime&&video.currentTime<marker.endTime)||null);video.addEventListener('timeupdate',track);return()=>video.removeEventListener('timeupdate',track);},[markers]);
@@ -131,17 +134,18 @@ function Player({ item, settings, onClose, onProgress, onFinished }: { item: Med
   function finish(){save('stopped');onFinished();}
 
   return <div className="player-layer">
-    <div className="player-top"><div><strong>{item.kind === 'episode' ? item.seriesTitle : item.title}</strong>{item.kind === 'episode' && <span>S{item.season} · A{item.episode} · {item.title}</span>}</div><div className="player-actions"><label>Snelheid <select value={speed} onChange={e=>changeSpeed(Number(e.target.value))}>{[.5,.75,1,1.25,1.5,2].map(x=><option key={x} value={x}>{x}×</option>)}</select></label><button className="icon-button" onClick={onClose} aria-label="Sluiten"><Icon name="close" /></button></div></div>
-    <video ref={videoRef} controls autoPlay playsInline onPlay={()=>save('playing')} onPause={()=>save('paused')} onEnded={finish} onError={() => item.directPlay && useHls()}>
-      {item.hasSubtitle && <track default kind="subtitles" srcLang="nl" label="Nederlands" src={`/api/media/${item.id}/subtitle`} />}
+    <div className="player-top"><div><strong>{item.kind === 'episode' ? item.seriesTitle : item.title}</strong>{item.kind === 'episode' && <span>S{item.season} · A{item.episode} · {item.title}</span>}{playbackInfo&&<span className={`playback-mode ${playbackInfo.decision.mode}`}>{playbackInfo.decision.label}</span>}</div><div className="player-actions"><CastButton item={item} settings={settings} onError={setError}/><label>Kwaliteit <select value={quality} onChange={e=>setQuality(e.target.value)}><option value="auto">Automatisch</option><option value="original">Origineel</option><option value="4k-max">4K Maximum</option><option value="4k-high">4K Hoog</option><option value="4k-balanced">4K Gebalanceerd</option><option value="1080p-max">1080p Maximum</option><option value="1080p-high">1080p Hoog</option><option value="1080p-balanced">1080p Gebalanceerd</option><option value="720p">720p</option><option value="data-saver">Databesparing</option></select></label><label>Snelheid <select value={speed} onChange={e=>changeSpeed(Number(e.target.value))}>{[.5,.75,1,1.25,1.5,2].map(x=><option key={x} value={x}>{x}×</option>)}</select></label><button onClick={()=>setShowTechnical(!showTechnical)}>Technische informatie</button><button className="icon-button" onClick={onClose} aria-label="Sluiten"><Icon name="close" /></button></div></div>
+    <video ref={videoRef} controls autoPlay playsInline onPlay={()=>save('playing')} onPause={()=>save('paused')} onEnded={finish}>
+      {item.hasSubtitle && playbackInfo?.urls.subtitle && <track default kind="subtitles" srcLang="nl" label="Nederlands" src={playbackInfo.urls.subtitle} />}
     </video>
     {transcoding && !error && <div className="player-status"><span className="spinner" /><strong>Video wordt klaargemaakt</strong><small>De eerste keer kan dit even duren</small></div>}
     {error && <div className="player-status"><strong>{error}</strong></div>}
+    {showTechnical&&playbackInfo&&<aside className="technical-playback"><header><strong>Technische informatie</strong><button onClick={()=>setShowTechnical(false)}>Sluiten</button></header><div className="technical-grid"><span>Methode<b>{playbackInfo.decision.label}</b></span><span>Container<b>{playbackInfo.technical.container} → {playbackInfo.decision.outputContainer}</b></span><span>Video<b>{playbackInfo.technical.videoCodec} → {playbackInfo.decision.outputVideoCodec}</b></span><span>Beeld<b>{playbackInfo.technical.width}×{playbackInfo.technical.height} · {playbackInfo.technical.frameRate?.toFixed?.(3)||'?'} fps · {playbackInfo.technical.bitDepth}-bit</b></span><span>HDR<b>{playbackInfo.technical.hdr}{playbackInfo.technical.dolbyVisionProfile?` profiel ${playbackInfo.technical.dolbyVisionProfile}`:''}</b></span><span>Audio<b>{playbackInfo.technical.audioCodec} · {playbackInfo.technical.audioChannels||'?'} kanalen{playbackInfo.technical.atmos?' · Dolby Atmos':''}</b></span><span>Passthrough<b>{playbackInfo.decision.copyAudio?'Ja':'Nee'}</b></span><span>Netwerk<b>{playbackInfo.decision.network}</b></span></div>{playbackInfo.decision.reasons.length>0&&<ul>{playbackInfo.decision.reasons.map((reason:string)=><li key={reason}>{reason}</li>)}</ul>}<div className="codec-badges">{[playbackInfo.technical.height>=2160?'4K':null,playbackInfo.technical.hdr!=='sdr'?String(playbackInfo.technical.hdr).toUpperCase():null,playbackInfo.technical.atmos?'Dolby Atmos':null,playbackInfo.decision.label].filter(Boolean).map((badge:string)=><b key={badge}>{badge}</b>)}</div></aside>}
     {activeMarker && ((activeMarker.type==='intro'&&settings.skipIntro)||(activeMarker.type==='credits'&&settings.skipCredits)||activeMarker.type==='commercial') && <button className="skip-button" onClick={()=>{if(videoRef.current)videoRef.current.currentTime=activeMarker.endTime;}}>{activeMarker.type==='intro'?'Intro overslaan':activeMarker.type==='credits'?'Aftiteling overslaan':'Reclame overslaan'} →</button>}
   </div>;
 }
 
-function Detail({ item, episodes, playlists, isAdmin, onClose, onPlay, onState, onEdit, onNotice }: { item: MediaItem; episodes?: MediaItem[]; playlists: {id:number;name:string}[]; isAdmin:boolean; onClose: () => void; onPlay: (item: MediaItem) => void; onState:(patch:Partial<MediaItem['state']>)=>void; onEdit:()=>void; onNotice:(message:string)=>void }) {
+function Detail({ item, episodes, playlists, settings, isAdmin, onClose, onPlay, onState, onEdit, onNotice }: { item: MediaItem; episodes?: MediaItem[]; playlists: {id:number;name:string}[];settings:Settings; isAdmin:boolean; onClose: () => void; onPlay: (item: MediaItem) => void; onState:(patch:Partial<MediaItem['state']>)=>void; onEdit:()=>void; onNotice:(message:string)=>void }) {
   const isSeries = Boolean(episodes?.length);
   const [playlistId,setPlaylistId]=useState('');
   const target=isSeries?episodes![0]:item;
@@ -150,7 +154,7 @@ function Detail({ item, episodes, playlists, isAdmin, onClose, onPlay, onState, 
     <article className="detail-card">
       <button className="icon-button detail-close" onClick={onClose}><Icon name="close" /></button>
       <div className="detail-hero" style={item.backdropUrl ? { backgroundImage: `linear-gradient(90deg, rgba(7,17,14,.98) 0%,rgba(7,17,14,.74) 48%,rgba(7,17,14,.1)), url(${item.backdropUrl})` } : undefined}>
-        <div className="detail-copy"><p className="eyebrow">{isSeries ? 'SERIE' : 'FILM'}{item.edition?` · ${item.edition}`:''}</p><h2>{item.seriesTitle || item.title}</h2>{item.tagline&&<em className="tagline">{item.tagline}</em>}<div className="detail-meta">{[item.year, item.contentRating, item.hdr?'HDR':null,item.height ? `${item.height}p` : null, !isSeries && item.duration ? formatDuration(item.duration) : null].filter(Boolean).join(' · ')}</div><p>{item.overview || 'Geen beschrijving beschikbaar. Voeg een TMDB-sleutel toe bij Instellingen om metadata op te halen.'}</p>{!isSeries && <button className="primary" onClick={() => onPlay(item)}><Icon name="play" /> Afspelen{item.progress?.position ? ' hervatten' : ''}</button>}</div>
+        <div className="detail-copy"><p className="eyebrow">{isSeries ? 'SERIE' : 'FILM'}{item.edition?` · ${item.edition}`:''}</p><h2>{item.seriesTitle || item.title}</h2>{item.tagline&&<em className="tagline">{item.tagline}</em>}<div className="detail-meta">{[item.year, item.contentRating, item.hdr?'HDR':null,item.height ? `${item.height}p` : null, !isSeries && item.duration ? formatDuration(item.duration) : null].filter(Boolean).join(' · ')}</div><p>{item.overview || 'Geen beschrijving beschikbaar. Voeg een TMDB-sleutel toe bij Instellingen om metadata op te halen.'}</p>{!isSeries && <div className="button-row"><button className="primary" onClick={() => onPlay(item)}><Icon name="play" /> Afspelen{item.progress?.position ? ' hervatten' : ''}</button><CastButton item={item} settings={settings} onError={onNotice}/></div>}</div>
       </div>
       <div className="detail-tools">
         <button className={item.state?.favorite?'tool-active':''} onClick={()=>onState({favorite:!item.state?.favorite})}><Icon name="heart"/>{item.state?.favorite?'Favoriet':'Favoriet maken'}</button>
@@ -217,6 +221,8 @@ function SettingsPanel({ bootstrap, reload, refreshLibrary }: { bootstrap: Boots
   const [users, setUsers] = useState<User[]>([]);
   const [userForm, setUserForm] = useState({ username: '', password: '' });
   const [advanced,setAdvanced]=useState({autoplay:bootstrap.settings.autoplay,rewindOnResume:bootstrap.settings.rewindOnResume,skipIntro:bootstrap.settings.skipIntro,skipCredits:bootstrap.settings.skipCredits,hardwareTranscoding:bootstrap.settings.hardwareTranscoding,toneMapping:bootstrap.settings.toneMapping,maxTranscodes:bootstrap.settings.maxTranscodes,uploadLimitMbps:bootstrap.settings.uploadLimitMbps});
+  const [networkSettings,setNetworkSettings]=useState({localStreamingEnabled:bootstrap.settings.localStreamingEnabled,localStreamingAddress:bootstrap.settings.localStreamingAddress,localStreamingPort:bootstrap.settings.localStreamingPort,castReceiverAppId:bootstrap.settings.castReceiverAppId,defaultQualityLan:bootstrap.settings.defaultQualityLan,defaultQualityTailscale:bootstrap.settings.defaultQualityTailscale,defaultQualityMobile:bootstrap.settings.defaultQualityMobile,defaultQualityDownload:bootstrap.settings.defaultQualityDownload,defaultQualityLiveTv:bootstrap.settings.defaultQualityLiveTv});
+  const [lanAddresses,setLanAddresses]=useState<string[]>([]);
   const [dashboard,setDashboard]=useState<any>(null);
   const [webhooks,setWebhooks]=useState<any[]>([]);
   const [hookUrl,setHookUrl]=useState('');
@@ -231,7 +237,7 @@ function SettingsPanel({ bootstrap, reload, refreshLibrary }: { bootstrap: Boots
   const [tvForm,setTvForm]=useState({name:'',playlistUrl:'',xmltvUrl:'',recordingPath:''});
   const [tvPicker,setTvPicker]=useState(false);
   const isAdmin = bootstrap.user.role === 'admin';
-  useEffect(() => { if (isAdmin) void Promise.all([api<User[]>('/users').then(setUsers),api('/dashboard').then(setDashboard),api<any[]>('/webhooks').then(setWebhooks),api<any[]>('/extra-sources').then(setExtraSources),api<any[]>('/tv/sources').then(setTvSources)]);void api<any[]>('/playlists').then(setPlaylists);void api<any[]>('/collections').then(setCollections); }, [isAdmin]);
+  useEffect(() => { if (isAdmin) void Promise.all([api<User[]>('/users').then(setUsers),api('/dashboard').then(setDashboard),api<any[]>('/webhooks').then(setWebhooks),api<any[]>('/extra-sources').then(setExtraSources),api<any[]>('/tv/sources').then(setTvSources),api<any>('/network/interfaces').then(result=>setLanAddresses(result.addresses))]);void api<any[]>('/playlists').then(setPlaylists);void api<any[]>('/collections').then(setCollections); }, [isAdmin]);
   async function act(fn: () => Promise<any>, success: string) { setError(''); setMessage(''); try { await fn(); setMessage(success); await reload(); } catch(e:any) { setError(e.message); } }
   async function addSource(e: React.FormEvent) { e.preventDefault(); await act(() => post('/sources', sourceForm), 'Bibliotheek toegevoegd. Start nu een scan.'); setSourceForm({ name:'', path:'', kind:'movies' }); }
   async function startScan() { await act(() => post('/scan'), 'De scan is gestart.'); }
@@ -251,6 +257,7 @@ function SettingsPanel({ bootstrap, reload, refreshLibrary }: { bootstrap: Boots
       </section>
       <section className="panel"><h2>TMDB-metadata</h2><p>Voor posters, achtergronden en Nederlandse beschrijvingen.</p><label>API-sleutel of Read Access Token<input type="password" value={tmdbToken} onChange={e=>setTmdbToken(e.target.value)} placeholder="Plak je TMDB-sleutel"/></label><button className="primary" onClick={()=>act(()=>patch('/settings',{tmdbToken}), 'TMDB is gekoppeld; ontbrekende metadata wordt opgehaald.')}>{bootstrap.settings.tmdbConfigured ? 'Sleutel wijzigen' : 'Koppelen'}</button><a className="help-link" href="https://www.themoviedb.org/settings/api" target="_blank" rel="noreferrer">Gratis sleutel aanvragen bij TMDB ↗</a></section>
       <section className="panel span-2"><div className="panel-heading"><div><h2>Premium afspelen</h2><p>Hardware-transcoding, HDR en automatisch doorspelen.</p></div><span className="premium-badge">THUISHUB PRO · INBEGREPEN</span></div><div className="toggle-grid"><label><input type="checkbox" checked={advanced.autoplay} onChange={e=>setAdvanced({...advanced,autoplay:e.target.checked})}/><span><strong>Autoplay</strong><small>Speel de volgende aflevering automatisch</small></span></label><label><input type="checkbox" checked={advanced.skipIntro} onChange={e=>setAdvanced({...advanced,skipIntro:e.target.checked})}/><span><strong>Intro overslaan</strong><small>Toon de knop binnen een intromarker</small></span></label><label><input type="checkbox" checked={advanced.skipCredits} onChange={e=>setAdvanced({...advanced,skipCredits:e.target.checked})}/><span><strong>Credits overslaan</strong><small>Ga sneller naar de volgende aflevering</small></span></label><label><input type="checkbox" checked={advanced.toneMapping} onChange={e=>setAdvanced({...advanced,toneMapping:e.target.checked})}/><span><strong>HDR-tone-mapping</strong><small>Correcte kleuren op SDR-schermen</small></span></label></div><div className="advanced-fields"><label>Transcoder<select value={advanced.hardwareTranscoding} onChange={e=>setAdvanced({...advanced,hardwareTranscoding:e.target.value})}><option value="auto">Automatisch (aanbevolen)</option><option value="nvidia">NVIDIA NVENC</option><option value="amd">AMD AMF</option><option value="intel">Intel Quick Sync</option><option value="software">Alleen processor</option></select></label><label>Terugspoelen bij hervatten<input type="number" min="0" max="30" value={advanced.rewindOnResume} onChange={e=>setAdvanced({...advanced,rewindOnResume:Number(e.target.value)})}/></label><label>Max. gelijktijdige transcodes<input type="number" min="1" max="10" value={advanced.maxTranscodes} onChange={e=>setAdvanced({...advanced,maxTranscodes:Number(e.target.value)})}/></label><label>Uploadlimiet (Mbps, 0 = onbeperkt)<input type="number" min="0" value={advanced.uploadLimitMbps} onChange={e=>setAdvanced({...advanced,uploadLimitMbps:Number(e.target.value)})}/></label></div><button className="primary" onClick={()=>act(()=>patch('/settings',advanced),'Premium afspeelinstellingen opgeslagen.')}>Instellingen opslaan</button></section>
+      <section className="panel span-2"><div className="panel-heading"><div><h2>Netwerk en tv-streaming</h2><p>De beheerinterface blijft op 127.0.0.1. Alleen beperkte, ondertekende afspeelroutes worden op het gekozen privé-adres aangeboden.</p></div><span className="premium-badge">PRIVÉ-LAN</span></div><div className="toggle-grid"><label><input type="checkbox" checked={networkSettings.localStreamingEnabled} onChange={e=>setNetworkSettings({...networkSettings,localStreamingEnabled:e.target.checked})}/><span><strong>Streamen binnen thuisnetwerk</strong><small>Geen routerpoorten en geen openbare netwerkprofielen</small></span></label></div><div className="advanced-fields"><label>Privé-LAN-adres<select value={networkSettings.localStreamingAddress} onChange={e=>setNetworkSettings({...networkSettings,localStreamingAddress:e.target.value})}><option value="">Selecteer adres</option>{lanAddresses.map(address=><option key={address}>{address}</option>)}</select></label><label>Streamingpoort<input type="number" min="1024" max="65535" value={networkSettings.localStreamingPort} onChange={e=>setNetworkSettings({...networkSettings,localStreamingPort:Number(e.target.value)})}/></label><label>Google Cast Receiver App ID<input value={networkSettings.castReceiverAppId} onChange={e=>setNetworkSettings({...networkSettings,castReceiverAppId:e.target.value.toUpperCase()})} placeholder="Leeg = standaardreceiver"/></label>{([['defaultQualityLan','Thuisnetwerk'],['defaultQualityTailscale','Tailscale'],['defaultQualityMobile','Mobiel internet'],['defaultQualityDownload','Downloads'],['defaultQualityLiveTv','Live TV']] as const).map(([key,label])=><label key={key}>Standaardkwaliteit {label}<select value={networkSettings[key]} onChange={e=>setNetworkSettings({...networkSettings,[key]:e.target.value})}>{[['auto','Automatisch'],['original','Origineel'],['4k-max','4K Maximum · 80 Mbps'],['4k-high','4K Hoog · 40 Mbps'],['4k-balanced','4K Gebalanceerd · 25 Mbps'],['1080p-max','1080p Maximum · 20 Mbps'],['1080p-high','1080p Hoog · 12 Mbps'],['1080p-balanced','1080p Gebalanceerd · 8 Mbps'],['720p','720p · 4 Mbps'],['data-saver','Databesparing · 2 Mbps']].map(([value,text])=><option key={value} value={value}>{text}</option>)}</select></label>)}</div><div className="button-row"><button className="primary" onClick={()=>act(()=>patch('/settings',networkSettings),'Netwerkinstellingen opgeslagen. Herstart ThuisHub om de streamingpoort toe te passen.')}>Opslaan</button></div><p className="dashboard-note">Voer daarna bewust als administrator <code>scripts\configure-private-streaming.ps1 enable</code> uit voor een firewallregel die uitsluitend op het Windows-profiel Privé en LocalSubnet geldt.</p></section>
       <section className="panel"><h2>Playlists</h2><p>Maak afspeellijsten en voeg media toe vanaf een detailpagina.</p><div className="compact-list">{playlists.map(p=><span key={p.id}><strong>{p.name}</strong><small>{p.itemCount} items</small></span>)}</div><form className="inline-form" onSubmit={async e=>{e.preventDefault();const p=await post<any>('/playlists',{name:playlistName});setPlaylists([...playlists,p]);setPlaylistName('')}}><input required placeholder="Nieuwe playlist" value={playlistName} onChange={e=>setPlaylistName(e.target.value)}/><button className="primary"><Icon name="plus"/></button></form></section>
       <section className="panel"><h2>Collecties</h2><p>Groepeer films en series in eigen verzamelingen.</p><div className="compact-list">{collections.map(c=><span key={c.id}><strong>{c.name}</strong><small>{c.itemCount} items</small></span>)}</div><form className="inline-form" onSubmit={async e=>{e.preventDefault();const c=await post<any>('/collections',{name:collectionName});setCollections([...collections,c]);setCollectionName('')}}><input required placeholder="Nieuwe collectie" value={collectionName} onChange={e=>setCollectionName(e.target.value)}/><button className="primary"><Icon name="plus"/></button></form></section>
       <section className="panel span-2"><h2>Gebruikers</h2><p>Ieder profiel houdt zijn eigen kijkvoortgang bij.</p><div className="user-chips">{users.map(user=><span key={user.id}>{user.username}<small>{user.role === 'admin' ? 'Beheerder' : 'Gebruiker'}</small></span>)}</div><form className="user-form" onSubmit={e=>{e.preventDefault(); act(()=>post<User>('/users',userForm).then(u=>setUsers([...users,u])), 'Gebruiker toegevoegd.'); setUserForm({username:'',password:''});}}><input required placeholder="Gebruikersnaam" value={userForm.username} onChange={e=>setUserForm({...userForm,username:e.target.value})}/><input required type="password" placeholder="Wachtwoord (min. 8 tekens)" value={userForm.password} onChange={e=>setUserForm({...userForm,password:e.target.value})}/><button className="primary">Gebruiker toevoegen</button></form></section>
@@ -337,11 +344,12 @@ export default function App() {
       {view==='settings'&&<SettingsPanel bootstrap={bootstrap} reload={loadBootstrap} refreshLibrary={loadLibrary}/>} 
     </main>
     <nav className="bottom-nav">{([['home','home','Start'],['movies','movie','Films'],['series','series','Series'],['music','music','Muziek'],['photos','photos','Foto’s'],['live','live','Live'],['watchlist','watchlist','Mijn lijst'],...(auth.user.role==='admin'?[['dashboard','settings','Dashboard']]:[]),['settings','settings','Instellingen']] as [View,any,string][]).map(([id,icon,label])=><button key={id} className={view===id?'active':''} onClick={()=>nav(id)}><Icon name={icon}/><span>{label}</span></button>)}</nav>
-    {selected&&<Detail item={selected.item} episodes={selected.episodes} playlists={playlists} isAdmin={auth.user.role==='admin'} onClose={()=>setSelected(null)} onPlay={item=>{setSelected(null);setPlaying(item);}} onState={state=>updateMediaState(selected.item.id,state)} onEdit={()=>setEditor(selected.item)} onNotice={message=>{setNotice(message);setTimeout(()=>setNotice(''),3500)}}/>}
+    {selected&&<Detail item={selected.item} episodes={selected.episodes} playlists={playlists} settings={bootstrap.settings} isAdmin={auth.user.role==='admin'} onClose={()=>setSelected(null)} onPlay={item=>{setSelected(null);setPlaying(item);}} onState={state=>updateMediaState(selected.item.id,state)} onEdit={()=>setEditor(selected.item)} onNotice={message=>{setNotice(message);setTimeout(()=>setNotice(''),3500)}}/>}
     {playing&&<Player item={playing} settings={bootstrap.settings} onClose={()=>setPlaying(null)} onProgress={updateProgress} onFinished={()=>{if(bootstrap.settings.autoplay&&nextItem)setPlaying(nextItem);else setPlaying(null);}}/>} 
     {editor&&<MetadataEditor item={editor} onClose={()=>setEditor(null)} onSaved={saveEdited}/>} 
     {notice&&<div className="toast">{notice}</div>}
     {audioTrack&&<AudioPlayer track={audioTrack} onClose={()=>setAudioTrack(null)} onEnded={()=>{const index=music.findIndex(x=>x.id===audioTrack.id);setAudioTrack(music[index+1]||null)}}/>}
+    <CastRemote/>
   </div>;
 }
 

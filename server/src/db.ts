@@ -226,6 +226,44 @@ db.exec(`
     error TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS playback_devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    manufacturer TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    platform TEXT NOT NULL,
+    app_version TEXT NOT NULL DEFAULT '',
+    capabilities TEXT NOT NULL DEFAULT '{}',
+    overrides TEXT NOT NULL DEFAULT '{}',
+    trusted INTEGER NOT NULL DEFAULT 0,
+    last_seen_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS device_sessions (
+    token_hash TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL REFERENCES playback_devices(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS device_pairing_codes (
+    code_hash TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL REFERENCES playback_devices(id) ON DELETE CASCADE,
+    secret_hash TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    approved_at TEXT,
+    claimed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS device_commands (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL REFERENCES playback_devices(id) ON DELETE CASCADE,
+    command TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}',
+    acknowledged_at TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS device_commands_pending_idx ON device_commands(device_id,acknowledged_at,id);
 `);
 
 function ensureColumn(table: string, column: string, definition: string) {
@@ -242,6 +280,28 @@ ensureColumn('media_items', 'edition', 'TEXT');
 ensureColumn('media_items', 'original_title', 'TEXT');
 ensureColumn('media_items', 'tagline', 'TEXT');
 ensureColumn('media_items', 'color_transfer', 'TEXT');
+ensureColumn('media_items', 'container', 'TEXT');
+ensureColumn('media_items', 'probe_json', "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn('media_items', 'video_profile', 'TEXT');
+ensureColumn('media_items', 'codec_level', 'TEXT');
+ensureColumn('media_items', 'pixel_format', 'TEXT');
+ensureColumn('media_items', 'bit_depth', 'INTEGER NOT NULL DEFAULT 8');
+ensureColumn('media_items', 'frame_rate', 'REAL');
+ensureColumn('media_items', 'bitrate', 'INTEGER');
+ensureColumn('media_items', 'color_primaries', 'TEXT');
+ensureColumn('media_items', 'color_space', 'TEXT');
+ensureColumn('media_items', 'hdr_type', "TEXT NOT NULL DEFAULT 'sdr'");
+ensureColumn('media_items', 'dolby_vision_profile', 'INTEGER');
+ensureColumn('media_items', 'dolby_vision_layer', 'TEXT');
+ensureColumn('media_items', 'dolby_vision_enhancement', 'TEXT');
+ensureColumn('media_items', 'hdr10_compatibility_layer', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('media_items', 'audio_profile', 'TEXT');
+ensureColumn('media_items', 'audio_channels', 'INTEGER');
+ensureColumn('media_items', 'audio_layout', 'TEXT');
+ensureColumn('media_items', 'atmos', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('media_items', 'dts_x', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('media_items', 'subtitle_format', "TEXT NOT NULL DEFAULT 'none'");
+ensureColumn('playback_devices', 'user_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
 
 export function getSetting(key: string, fallback = ''): string {
   return (db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? fallback;
@@ -274,8 +334,18 @@ export function publicSettings() {
     backupLocation: getSetting('backupLocation', appPaths.backupsDir),
     automaticUpdateCheck: getSetting('automaticUpdateCheck', 'false') === 'true',
     updateChannel: getSetting('updateChannel', 'stable'),
+    developmentUpdatesEnabled: getSetting('developmentUpdatesEnabled', 'false') === 'true',
     updateManifestUrl: getSetting('updateManifestUrl', ''),
     maxLogStorageMb: Number(getSetting('maxLogStorageMb', '100'))
+    ,localStreamingEnabled: getSetting('localStreamingEnabled', 'false') === 'true'
+    ,localStreamingAddress: getSetting('localStreamingAddress', '')
+    ,localStreamingPort: Number(getSetting('localStreamingPort', '8788'))
+    ,castReceiverAppId: getSetting('castReceiverAppId', '')
+    ,defaultQualityLan: getSetting('defaultQualityLan', 'original')
+    ,defaultQualityTailscale: getSetting('defaultQualityTailscale', 'auto')
+    ,defaultQualityMobile: getSetting('defaultQualityMobile', '1080p-balanced')
+    ,defaultQualityDownload: getSetting('defaultQualityDownload', 'original')
+    ,defaultQualityLiveTv: getSetting('defaultQualityLiveTv', 'auto')
   };
 }
 

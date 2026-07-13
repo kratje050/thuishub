@@ -1,0 +1,1 @@
+<resources><style name="Theme.ThuisHub" parent="Theme.AppCompat.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#D9FF3F</item><item name="android:windowBackground">#07110E</item><item name="android:navigationBarColor">#020706</item></style></resources>

@@ -12,14 +12,18 @@ import { APP_NAME, APP_PORT, APP_VERSION } from './constants.js';
 import { getSetting, markCleanShutdown } from './db.js';
 import { log, setMaxLogStorageMb } from './logger.js';
 import { checkForUpdates } from './updates.js';
+import { playbackRouter } from './routes/playback.js';
+import { restrictLanListener, startLanStreamingServer } from './network.js';
 
 const app = express();
 const port = Number(process.env.PORT || APP_PORT);
 const host = process.env.HOST || '127.0.0.1';
 
 app.disable('x-powered-by');
+app.use(restrictLanListener);
 app.use(express.json({ limit: '1mb' }));
 app.get('/api/health', (_req, res) => res.json({ app: 'thuishub', name: APP_NAME, status: 'ok', version: APP_VERSION }));
+app.use('/api/playback', playbackRouter);
 app.use(optionalAuth);
 app.use('/api/auth', authRouter);
 app.use('/api', apiRouter);
@@ -46,12 +50,14 @@ const server = app.listen(port, host, () => {
   log('INFO', 'server', 'Server gestart.', { host, port });
   if (getSetting('automaticUpdateCheck', 'false') === 'true') void checkForUpdates();
 });
+const lanServer = startLanStreamingServer(app);
 
 function shutdown() {
   markCleanShutdown();
   log('INFO', 'server', 'Server wordt netjes afgesloten.');
   clearTranscodes();
   server.close(() => process.exit(0));
+  lanServer?.close();
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

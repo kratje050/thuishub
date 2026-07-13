@@ -22,8 +22,22 @@ import { appPaths } from '../paths.js';
 import { clearLogs, log, logStorageBytes, readLogs, setMaxLogStorageMb } from '../logger.js';
 import { tailscaleStatus } from '../tailscale.js';
 import { checkForUpdates, downloadUpdate } from '../updates.js';
+import { BROWSER_CAPABILITIES, CAST_CAPABILITIES, QUALITY_PROFILES, decisionEngine, type DeviceCapabilities, type QualityId } from '../playback.js';
+import { mediaCapabilitiesFromRow } from '../media-info.js';
+import { createPlaybackToken } from '../playback-tokens.js';
+import { acknowledgeDeviceCommand, approvePairing, claimPairing, deviceCapabilities, forgetDevice, listDevices, pendingDeviceCommands, queueDeviceCommand, requestPairing, requireDevice, setDeviceOverrides } from '../devices.js';
+import { assignedPrivateAddresses } from '../network.js';
 
 export const apiRouter = Router();
+const deviceRatingLevels:Record<string,number>={ALL:99,AL:0,G:0,TV_Y:0,TV_G:0,'6':6,PG:8,TV_PG:9,'9':9,'12':12,PG_13:13,'14':14,TV_14:14,'16':16,R:16,NC_17:18,'18':18,TV_MA:18};
+
+apiRouter.post('/devices/pair/request', (req,res,next)=>{try{res.status(201).json(requestPairing(req.body||{}))}catch(error){next(error)}});
+apiRouter.post('/devices/pair/claim', (req,res)=>{const result=claimPairing(String(req.body?.deviceId||''),String(req.body?.pairingSecret||''));res.status(result.status==='expired'?410:200).json(result)});
+apiRouter.get('/device/commands',requireDevice,(req,res)=>res.json({items:pendingDeviceCommands(req.playbackDevice!.id)}));
+apiRouter.post('/device/commands/:id/ack',requireDevice,(req,res)=>res.json({ok:acknowledgeDeviceCommand(req.playbackDevice!.id,Number(req.params.id))}));
+apiRouter.get('/device/library',requireDevice,(req,res)=>{const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;if(!profile)return res.status(403).end();const rows=db.prepare('SELECT * FROM media_items ORDER BY sort_title COLLATE NOCASE').all() as any[];const max=deviceRatingLevels[String(profile.maxRating||'ALL').toUpperCase().replace(/[- ]/g,'_')]??99;res.json(rows.filter(row=>profile.role==='admin'||!row.content_rating||(deviceRatingLevels[String(row.content_rating).toUpperCase().replace(/[- ]/g,'_')]??0)<=max).map(row=>({id:row.id,kind:row.kind,title:row.title,seriesTitle:row.series_title,season:row.season,episode:row.episode,year:row.year,width:row.width,height:row.height,hdrType:row.hdr_type,audioCodec:row.audio_codec,atmos:Boolean(row.atmos),posterUrl:row.poster_path?`https://image.tmdb.org/t/p/w500${row.poster_path}`:null})))});
+apiRouter.post('/device/media/:id/decision',requireDevice,(req,res)=>{const mediaId=Number(req.params.id);const row=db.prepare('SELECT * FROM media_items WHERE id=?').get(mediaId) as any;if(!row)return res.status(404).json({error:'Media niet gevonden.'});const capabilities=deviceCapabilities(req.playbackDevice!.id);if(!capabilities)return res.status(403).json({error:'Apparaatprofiel ontbreekt.'});const decision=decisionEngine({media:mediaCapabilitiesFromRow(row),device:capabilities,quality:(req.body?.quality||'auto') as QualityId,availableBandwidthMbps:Number(req.body?.availableBandwidthMbps)||undefined,network:req.body?.network||'lan'});const address=getSetting('localStreamingAddress','');const port=Number(getSetting('localStreamingPort','8788'));const base=address?`http://${address}:${port}`:`${req.protocol}://${req.get('host')}`;const resource=decision.mode==='direct_play'?'file':'hls';const token=createPlaybackToken({mediaId,resource,userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id,options:{copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight}},resource==='file'?600:3600);const subtitle=row.subtitle_path?createPlaybackToken({mediaId,resource:'subtitle',userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id},3600):'';res.json({decision,technical:mediaCapabilitiesFromRow(row),urls:{playback:`${base}/api/playback/${mediaId}/${resource==='file'?'file':'hls/index.m3u8'}?token=${encodeURIComponent(token)}`,subtitle:subtitle?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitle)}`:''}})});
+apiRouter.put('/device/media/:id/progress',requireDevice,(req,res)=>{const position=Math.max(0,Number(req.body?.position)||0);const duration=Math.max(0,Number(req.body?.duration)||0);const completed=duration>0&&position/duration>=.92?1:0;db.prepare(`INSERT INTO progress(user_id,media_id,position,duration,completed,updated_at) VALUES(?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id,media_id) DO UPDATE SET position=excluded.position,duration=excluded.duration,completed=excluded.completed,updated_at=CURRENT_TIMESTAMP`).run(req.playbackDevice!.userId,Number(req.params.id),position,duration,completed);res.json({position,duration,completed:Boolean(completed)})});
 apiRouter.use(requireAuth);
 
 const ratingLevels:Record<string,number>={ALL:99,AL:0,G:0,TV_Y:0,TV_G:0,'6':6,PG:8,TV_PG:9,'9':9,'12':12,PG_13:13,'14':14,TV_14:14,'16':16,R:16,NC_17:18,'18':18,TV_MA:18};
@@ -35,6 +49,32 @@ apiRouter.get('/bootstrap', (req, res) => {
   const networkUrls = [`http://localhost:${port}`];
   res.json({ user: req.user, settings: publicSettings(), sources, scan: scanState, networkUrls });
 });
+
+apiRouter.get('/playback/quality-profiles',(_req,res)=>res.json(QUALITY_PROFILES));
+apiRouter.get('/network/interfaces',requireAdmin,(_req,res)=>res.json({addresses:assignedPrivateAddresses(),selected:getSetting('localStreamingAddress',''),port:Number(getSetting('localStreamingPort','8788')),restartRequired:true}));
+apiRouter.post('/playback/:id/decision',async(req,res,next)=>{try{
+  const mediaId=Number(req.params.id);const row=db.prepare('SELECT * FROM media_items WHERE id=?').get(mediaId) as any;
+  if(!row)return res.status(404).json({error:'Media niet gevonden.'});
+  const requestedDeviceId=typeof req.body?.deviceId==='string'?req.body.deviceId:'';
+  const supplied=req.body?.capabilities as DeviceCapabilities|undefined;
+  const capabilities=requestedDeviceId?deviceCapabilities(requestedDeviceId):supplied||(req.body?.target==='cast'?CAST_CAPABILITIES:BROWSER_CAPABILITIES);
+  if(!capabilities)return res.status(404).json({error:'Afspeelapparaat niet gevonden of niet gekoppeld.'});
+  const network=(['lan','tailscale','mobile','unknown'].includes(req.body?.network)?req.body.network:'unknown') as any;
+  const decision=decisionEngine({media:mediaCapabilitiesFromRow(row),device:capabilities,quality:(req.body?.quality||'auto') as QualityId,customMaxBitrateMbps:Number(req.body?.customMaxBitrateMbps)||undefined,availableBandwidthMbps:Number(req.body?.availableBandwidthMbps)||undefined,network,forceSdr:Boolean(req.body?.forceSdr)});
+  const localEnabled=getSetting('localStreamingEnabled','false')==='true';const localAddress=getSetting('localStreamingAddress','');const localPort=Number(getSetting('localStreamingPort','8788'));
+  const needsLan=['cast','android-tv','google-tv','tizen','dlna'].includes(String(capabilities.platform||''));
+  const base=needsLan&&localEnabled&&localAddress?`http://${localAddress}:${localPort}`:`${req.protocol}://${req.get('host')}`;
+  const fileToken=createPlaybackToken({mediaId,resource:'file',userId:req.user!.id,deviceId:requestedDeviceId||undefined},600);
+  const hlsToken=createPlaybackToken({mediaId,resource:'hls',userId:req.user!.id,deviceId:requestedDeviceId||undefined,options:{copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight}},3600);
+  const subtitleToken=row.subtitle_path?createPlaybackToken({mediaId,resource:'subtitle',userId:req.user!.id,deviceId:requestedDeviceId||undefined},3600):'';
+  res.json({decision,technical:{...mediaCapabilitiesFromRow(row),fileSize:row.size,duration:row.duration},urls:{playback:decision.mode==='direct_play'?`${base}/api/playback/${mediaId}/file?token=${encodeURIComponent(fileToken)}`:`${base}/api/playback/${mediaId}/hls/index.m3u8?token=${encodeURIComponent(hlsToken)}`,subtitle:subtitleToken?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitleToken)}`:'',expiresInSeconds:decision.mode==='direct_play'?600:3600},device:capabilities,localStreamingRequired:needsLan&&!localEnabled});
+}catch(error){next(error)}});
+
+apiRouter.get('/devices',requireAdmin,(_req,res)=>res.json({items:listDevices()}));
+apiRouter.post('/devices/pair/approve',requireAdmin,(req,res)=>{const ok=approvePairing(String(req.body?.code||''),req.user!.id);res.status(ok?200:400).json(ok?{message:'Afspeelapparaat gekoppeld aan dit profiel.'}:{error:'De koppelcode is ongeldig of verlopen.'})});
+apiRouter.patch('/devices/:id',requireAdmin,(req,res)=>res.json({ok:setDeviceOverrides(String(req.params.id),req.body?.overrides||{})}));
+apiRouter.delete('/devices/:id',requireAdmin,(req,res)=>res.json({ok:forgetDevice(String(req.params.id))}));
+apiRouter.post('/devices/:id/commands',requireAdmin,(req,res,next)=>{try{res.status(201).json({id:queueDeviceCommand(String(req.params.id),String(req.body?.command||''),req.body?.payload)})}catch(error){next(error)}});
 
 apiRouter.get('/library', (req, res) => {
   const kind = req.query.kind === 'movie' || req.query.kind === 'episode' ? req.query.kind : null;
@@ -241,9 +281,9 @@ apiRouter.delete('/logs', requireAdmin, (_req,res)=>{clearLogs();res.status(204)
 apiRouter.post('/logs/open-folder', requireAdmin, (_req,res)=>{if(process.platform==='win32')execFile('explorer.exe',[appPaths.logsDir],{windowsHide:false});res.status(204).end()});
 
 apiRouter.get('/tailscale', requireAdmin, async(_req,res)=>res.json(await tailscaleStatus()));
-apiRouter.get('/updates', requireAdmin, (_req,res)=>res.json({currentVersion:APP_VERSION,channel:getSetting('updateChannel','stable'),automatic:getSetting('automaticUpdateCheck','false')==='true',manifestUrl:getSetting('updateManifestUrl',''),lastCheckAt:getSetting('lastUpdateCheckAt',''),lastResult:JSON.parse(getSetting('lastUpdateResult','{}')||'{}')}));
+apiRouter.get('/updates', requireAdmin, (_req,res)=>res.json({currentVersion:APP_VERSION,channel:getSetting('updateChannel','stable'),automatic:getSetting('automaticUpdateCheck','false')==='true',source:'GitHub Releases: kratje050/thuishub',lastCheckAt:getSetting('lastUpdateCheckAt',''),lastResult:JSON.parse(getSetting('lastUpdateResult','{}')||'{}')}));
 apiRouter.post('/updates/check', requireAdmin, async(_req,res)=>res.json(await checkForUpdates()));
-apiRouter.post('/updates/download', requireAdmin, async(req,res,next)=>{try{if(req.body?.confirm!==true)return res.status(400).json({error:'Bevestig dat je de update wilt downloaden.'});res.json(await downloadUpdate(req.body.manifest))}catch(error){next(error)}});
+apiRouter.post('/updates/download', requireAdmin, async(req,res,next)=>{try{if(req.body?.confirm!==true)return res.status(400).json({error:'Bevestig dat je de update wilt downloaden.'});const trusted=JSON.parse(getSetting('lastUpdateResult','{}')||'{}');if(!trusted.available||!trusted.version||trusted.version!==req.body?.manifest?.version)return res.status(409).json({error:'Controleer eerst opnieuw op updates.'});res.json(await downloadUpdate(trusted))}catch(error){next(error)}});
 
 apiRouter.get('/webhooks', requireAdmin, (_req,res)=>res.json(db.prepare('SELECT id,url,events,enabled,created_at createdAt FROM webhooks ORDER BY id').all()));
 apiRouter.post('/webhooks', requireAdmin, (req,res)=>{try{new URL(req.body.url);}catch{return res.status(400).json({error:'Ongeldige webhook-URL.'});}const events=Array.isArray(req.body.events)?req.body.events.join(','):String(req.body.events||'play,pause,stop,scan');const result=db.prepare('INSERT INTO webhooks(url,events) VALUES(?,?)').run(req.body.url,events);res.status(201).json({id:Number(result.lastInsertRowid),url:req.body.url,events,enabled:true});});
@@ -326,7 +366,7 @@ apiRouter.get('/folders', requireAdmin, async (req, res) => {
 apiRouter.get('/settings', requireAdmin, (_req, res) => res.json(publicSettings()));
 apiRouter.patch('/settings', requireAdmin, async (req, res, next) => {
   try {
-    const { serverName, language, tmdbToken, autoplay, rewindOnResume, skipIntro, skipCredits, hardwareTranscoding, toneMapping, maxTranscodes, uploadLimitMbps, automaticBackups, backupRetention, backupLocation, automaticUpdateCheck, updateChannel, updateManifestUrl, maxLogStorageMb } = req.body || {};
+    const { serverName, language, tmdbToken, autoplay, rewindOnResume, skipIntro, skipCredits, hardwareTranscoding, toneMapping, maxTranscodes, uploadLimitMbps, automaticBackups, backupRetention, backupLocation, automaticUpdateCheck, updateChannel, developmentUpdatesEnabled, maxLogStorageMb,localStreamingEnabled,localStreamingAddress,localStreamingPort,castReceiverAppId,defaultQualityLan,defaultQualityTailscale,defaultQualityMobile,defaultQualityDownload,defaultQualityLiveTv } = req.body || {};
     if (typeof serverName === 'string' && serverName.trim()) setSetting('serverName', serverName.trim());
     if (typeof language === 'string' && /^[a-z]{2}-[A-Z]{2}$/.test(language)) setSetting('language', language);
     if (typeof tmdbToken === 'string' && tmdbToken && !tmdbToken.includes('•')) {
@@ -347,8 +387,13 @@ apiRouter.patch('/settings', requireAdmin, async (req, res, next) => {
     if (typeof backupLocation==='string'&&backupLocation.trim()) setSetting('backupLocation',path.resolve(backupLocation.trim()));
     if (typeof automaticUpdateCheck==='boolean') setSetting('automaticUpdateCheck',String(automaticUpdateCheck));
     if (['stable','beta','development'].includes(updateChannel)) setSetting('updateChannel',updateChannel);
-    if (typeof updateManifestUrl==='string'&&(!updateManifestUrl||/^https:\/\//i.test(updateManifestUrl))) setSetting('updateManifestUrl',updateManifestUrl.trim());
+    if (typeof developmentUpdatesEnabled==='boolean') setSetting('developmentUpdatesEnabled',String(developmentUpdatesEnabled));
     if (maxLogStorageMb!==undefined) { const value=Math.min(2048,Math.max(10,Number(maxLogStorageMb)||100)); setSetting('maxLogStorageMb',String(value)); setMaxLogStorageMb(value); }
+    if(typeof localStreamingEnabled==='boolean')setSetting('localStreamingEnabled',String(localStreamingEnabled));
+    if(typeof localStreamingAddress==='string'&&(!localStreamingAddress||/^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)\d{1,3}\.\d{1,3}$/.test(localStreamingAddress)))setSetting('localStreamingAddress',localStreamingAddress);
+    if(localStreamingPort!==undefined)setSetting('localStreamingPort',String(Math.min(65535,Math.max(1024,Number(localStreamingPort)||8788))));
+    if(typeof castReceiverAppId==='string'&&/^[A-F0-9]{0,16}$/i.test(castReceiverAppId))setSetting('castReceiverAppId',castReceiverAppId);
+    const qualityValues=QUALITY_PROFILES.map(item=>item.id);for(const[key,value]of Object.entries({defaultQualityLan,defaultQualityTailscale,defaultQualityMobile,defaultQualityDownload,defaultQualityLiveTv}))if(qualityValues.includes(value as any))setSetting(key,String(value));
     res.json(publicSettings());
   } catch { next(Object.assign(new Error('De TMDB-sleutel is niet geldig.'), { status: 400 })); }
 });

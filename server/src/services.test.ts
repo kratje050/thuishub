@@ -67,6 +67,6 @@ describe('updates', () => {
   });
 
   it('weigert een update met een foutieve SHA-256-hash', async () => {
-    await expect(updates.downloadUpdate({ version: '1.2.0', channel: 'stable', downloadUrl: 'https://updates.example/ThuisHub.exe', sha256: '0'.repeat(64), releaseNotes: 'test' }, async () => new Response('bestand', { status: 200 }))).rejects.toThrow('integriteitscontrole');
+    await expect(updates.downloadUpdate({ version: '1.2.0', channel: 'stable', assetName: 'ThuisHub-Setup-1.2.0.exe', downloadUrl: 'https://github.com/kratje050/thuishub/releases/download/v1.2.0/ThuisHub-Setup-1.2.0.exe', sha256: '0'.repeat(64), releaseNotes: 'test' }, async () => new Response('bestand', { status: 200 }))).rejects.toThrow('integriteitscontrole');
   });
 });

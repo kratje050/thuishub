@@ -7,6 +7,13 @@ import { ffmpegPath, videoEncoder, videoFilter } from './ffmpeg.js';
 const hlsRoot = path.join(dataDir, 'hls');
 fs.mkdirSync(hlsRoot, { recursive: true });
 const active = new Map<number, ChildProcessWithoutNullStreams>();
+const activeProfiles = new Map<number, string>();
+
+export type HlsOptions = { copyVideo?: boolean; copyAudio?: boolean; burnSubtitles?: boolean; subtitlePath?: string | null; targetBitrateMbps?: number; targetWidth?: number; targetHeight?: number };
+
+function subtitleFilterPath(value: string) {
+  return value.replaceAll('\\', '/').replaceAll(':', '\\:').replaceAll("'", "\\'").replaceAll('[', '\\[').replaceAll(']', '\\]');
+}
 
 export function isDirectPlayable(item: { file_path: string; video_codec?: string | null; audio_codec?: string | null }) {
   const ext = path.extname(item.file_path).toLowerCase();
@@ -17,26 +24,38 @@ export function isDirectPlayable(item: { file_path: string; video_codec?: string
   return false;
 }
 
-export async function ensureHls(id: number, filePath: string, colorTransfer?: string | null): Promise<string> {
+export async function ensureHls(id: number, filePath: string, colorTransfer?: string | null, options: HlsOptions = {}): Promise<string> {
   const dir = path.join(hlsRoot, String(id));
   const manifest = path.join(dir, 'index.m3u8');
-  if (fs.existsSync(manifest)) return manifest;
+  const profile = JSON.stringify(options);
+  if (fs.existsSync(manifest) && activeProfiles.get(id) === profile) return manifest;
+  if (active.has(id) && activeProfiles.get(id) !== profile) {
+    active.get(id)?.kill();
+    active.delete(id);
+  }
   if (!active.has(id)) {
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
     const encoder = videoEncoder();
+    const baseVideoFilter = videoFilter(colorTransfer,options.targetWidth||1920);
+    const completeVideoFilter = options.burnSubtitles
+      ? `subtitles=filename='${subtitleFilterPath(options.subtitlePath || filePath)}',${baseVideoFilter}`
+      : baseVideoFilter;
+    const videoArgs = options.copyVideo ? ['-c:v', 'copy'] : ['-c:v', encoder.codec, ...encoder.args,
+      '-vf', completeVideoFilter,...(options.targetBitrateMbps?['-maxrate',`${options.targetBitrateMbps}M`,'-bufsize',`${Math.max(2,options.targetBitrateMbps*2)}M`]:[])];
+    const audioArgs = options.copyAudio ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '384k', '-ac', '6'];
     const args = [
       '-hide_banner', '-loglevel', 'warning', '-i', filePath,
       '-map', '0:v:0', '-map', '0:a:0?', '-sn',
-      '-c:v', encoder.codec, ...encoder.args,
-      '-vf', videoFilter(colorTransfer), '-c:a', 'aac', '-b:a', '192k', '-ac', '2',
-      '-force_key_frames', 'expr:gte(t,n_forced*6)',
+      ...videoArgs,...audioArgs,
+      ...(options.copyVideo?[]:['-force_key_frames', 'expr:gte(t,n_forced*6)']),
       '-f', 'hls', '-hls_time', '6', '-hls_list_size', '0', '-hls_playlist_type', 'event',
       '-hls_flags', 'independent_segments+temp_file', '-hls_segment_filename', path.join(dir, 'segment-%05d.ts'), manifest
     ];
+    activeProfiles.set(id,profile);
     const process = spawn(ffmpegPath, args, { windowsHide: true });
     active.set(id, process);
-    process.on('close', () => active.delete(id));
+    process.on('close', () => { if (active.get(id) === process) active.delete(id); });
     process.stderr.on('data', chunk => process.stderrLog = ((process as any).stderrLog || '') + chunk.toString());
   }
   const deadline = Date.now() + 20_000;
@@ -57,6 +76,7 @@ export function hlsFile(id: number, name: string) {
 export function clearTranscodes() {
   for (const process of active.values()) process.kill();
   active.clear();
+  activeProfiles.clear();
 }
 
 declare module 'node:child_process' {

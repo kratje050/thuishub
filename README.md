@@ -1,56 +1,65 @@
-# ThuisHub 1.1.0
+# ThuisHub 1.2.0
 
-ThuisHub is een lokale Windows-mediaserver voor films, series, muziek, foto's en Live TV/DVR. De app werkt als zelfstandig Windows-programma én via `http://localhost:8787`. Gegevens blijven lokaal en toegang buitenshuis kan privé via Tailscale Serve.
+ThuisHub is een lokale Windows-mediaserver voor eigen films, series, muziek, foto's en Live TV/DVR. De beheerinterface blijft op `http://127.0.0.1:8787`; de Windows-app en browser gebruiken dezelfde lokale gegevens in `%APPDATA%\ThuisHub\data`.
+
+## Nieuw in 1.2.0
+
+- Centrale playback decision engine: Direct Play, daarna Direct Stream en alleen indien nodig Transcode.
+- Technische detectie van container, codecs, resolutie, framerate, bitdiepte, HDR, Dolby Vision, Atmos, DTS:X en ondertitels.
+- Google Cast-knop, apparaatkiezer, controller en optionele eigen branded Web Receiver.
+- Gekoppelde tv-apparaten met zescijferige code, kortlevende signed playback-URL's en capability-overrides.
+- Android TV/Google TV-app in `apps/android-tv` en Samsung Tizen-clientbron in `apps/samsung-tizen`.
+- Optionele streaminglistener op één gekozen privé-LAN-adres en aparte poort; geen routerpoorten, UPnP-portforwarding of Funnel.
+- Kwaliteitsprofielen van Origineel/80 Mbps tot Databesparing/2 Mbps.
+- Tokenloze updatecontrole via exacte assets uit GitHub Releases, met grootte-, SHA-256- en waar beschikbaar GitHub-digestcontrole.
 
 ## Starten
 
-- Geïnstalleerd: start **ThuisHub** via Start of de bureaubladsnelkoppeling.
-- Portable: open `release\ThuisHub-Portable-1.1.0.exe`.
-- Alleen browser/server: dubbelklik `ThuisHub starten.cmd`.
-- Volledig afsluiten: kies **ThuisHub afsluiten** in het systeemvak. Het vensterkruis verbergt de app alleen.
+- Geïnstalleerd: open **ThuisHub** via Start of de bureaubladsnelkoppeling.
+- Portable: open `release\ThuisHub-Portable-1.2.0.exe`.
+- Browser/server: dubbelklik `ThuisHub starten.cmd`.
+- Volledig afsluiten: kies **ThuisHub afsluiten** in het systeemvak.
 
-De Windows-app en browser delen `%APPDATA%\ThuisHub\data\thuishub.db`. Bij de eerste start wordt `%APPDATA%\Huiskamer\data` veilig gekopieerd, gecontroleerd en behouden. Zie [docs/DATA_MIGRATION.md](docs/DATA_MIGRATION.md).
+Bij een upgrade blijven database, media, gebruikers, voortgang, Live TV, DVR, back-ups en instellingen behouden. Maak desondanks altijd een actuele back-up via het serverdashboard.
 
-## Eerste gebruik
+## Tv koppelen
 
-1. Maak het eerste beheerdersprofiel aan.
-2. Voeg bibliotheekmappen toe bij Instellingen.
-3. Start een scan en laat ThuisHub metadata, posters en technische media-informatie opbouwen.
-4. Voeg optioneel een TMDB-token toe voor online metadata.
-5. Voeg voor Live TV een eigen M3U- en optioneel XMLTV-bestand of URL toe. Gebruik alleen bronnen waarvoor je rechten hebt.
+1. Schakel bij Instellingen > Netwerk **Streamen binnen thuisnetwerk** in, kies één privé-adres en poort en herstart ThuisHub.
+2. Maak de optionele Windows Firewall-regel als administrator met `scripts\configure-private-streaming.ps1 enable`.
+3. Open de Android TV- of Samsung-app en vul het getoonde LAN-adres in.
+4. Voer de zescijferige code in bij Dashboard > TV en afspeelapparaten.
 
-## Externe toegang
+Cast gebruikt in Chrome/Edge de Cast-apparaatkiezer. Voor de eigen receiver is registratie in de Google Cast Developer Console en een HTTPS-host nodig; zonder App ID wordt de standaardreceiver gebruikt. Zie [docs/TV_STREAMING.md](docs/TV_STREAMING.md).
 
-ThuisHub luistert uitsluitend op `127.0.0.1:8787`. Stel Tailscale Serve bewust in met:
+## Privétoegang
 
-```powershell
-tailscale serve --bg 8787
-```
-
-Gebruik geen router-port-forwarding of Tailscale Funnel. Volledige instructies staan in [docs/TAILSCALE_REMOTE_ACCESS.md](docs/TAILSCALE_REMOTE_ACCESS.md). Het hulpscript is `scripts\tailscale-serve.ps1`.
-
-## Beheer en opslag
-
-- Dashboard: Overzicht, streams, bibliotheken, transcoding, Live TV/DVR, externe toegang, back-ups, databaseherstel, logs, updates, systeeminformatie en Over.
-- Back-ups: `%APPDATA%\ThuisHub\backups`.
-- Logs: `%APPDATA%\ThuisHub\logs`.
-- Exports: `%APPDATA%\ThuisHub\exports`.
-- Gedownloade, gecontroleerde updates: `%APPDATA%\ThuisHub\updates`.
-
-Lees [docs/BACKUPS_AND_RECOVERY.md](docs/BACKUPS_AND_RECOVERY.md) en [docs/UPDATES.md](docs/UPDATES.md).
+Toegang buitenshuis blijft uitsluitend via Tailscale Serve lopen. Gebruik geen router-port-forwarding en geen Tailscale Funnel. Zie [docs/TAILSCALE_REMOTE_ACCESS.md](docs/TAILSCALE_REMOTE_ACCESS.md).
 
 ## Ontwikkelen en bouwen
 
-Vereist: Node.js 22+ en Windows x64.
+Vereist: Windows x64, Node.js 22+, Android Studio/SDK 35 voor de APK, en optioneel Tizen Studio met TV Extensions en Samsung-certificaat voor een WGT.
 
 ```powershell
 npm install
 npm run check
 npm run dist:win
+.\scripts\build-android-tv.ps1
+.\scripts\build-samsung-tv.ps1
 ```
 
-De build maakt `release\ThuisHub-Setup-1.1.0.exe` en `release\ThuisHub-Portable-1.1.0.exe`. Zonder certificaat blijft de build werken en meldt hij dat de bestanden niet ondertekend zijn. Zie [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+Releasegegevens maakt u na de builds met:
 
-## Veiligheid
+```powershell
+.\scripts\generate-release-metadata.ps1 -Version 1.2.0
+.\scripts\scan-release-secrets.ps1 -IncludeReleaseArtifacts
+```
 
-API-routes blijven met bestaande profielauthenticatie en beheerdersrechten beveiligd. ThuisHub opent geen poorten, gebruikt geen Funnel, logt geen wachtwoorden/tokens en vervangt de login niet door Tailscale. Een database wordt nooit voor herstel overschreven zonder noodback-up.
+Publicatie gebeurt nooit automatisch. Zie [docs/GITHUB_RELEASES.md](docs/GITHUB_RELEASES.md) en [SECURITY.md](SECURITY.md).
+
+## Documentatie
+
+- [Tv-streaming](docs/TV_STREAMING.md), [Google Cast](docs/GOOGLE_CAST.md), [Android TV](docs/ANDROID_TV.md), [Samsung Tizen](docs/SAMSUNG_TV.md)
+- [HDR en Dolby Vision](docs/HDR_AND_DOLBY_VISION.md), [audio-passthrough](docs/AUDIO_PASSTHROUGH.md), [kwaliteit](docs/QUALITY_PROFILES.md)
+- [Privé-LAN-streaming](docs/LOCAL_NETWORK_STREAMING.md), [apparaatcompatibiliteit](docs/DEVICE_COMPATIBILITY.md)
+- [GitHub Releases](docs/GITHUB_RELEASES.md), [openbare repositorybeveiliging](docs/PUBLIC_REPOSITORY_SECURITY.md)
+- [Handmatige testmatrix](docs/MANUAL_TEST_MATRIX.md)

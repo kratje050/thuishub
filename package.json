@@ -1,13 +1,13 @@
 {
   "name": "thuishub-media",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "ThuisHub: je veilige lokale mediaserver voor Windows en browser",
   "main": "desktop/main.cjs",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,web -c cyan,magenta \"tsx watch server/src/index.ts\" \"vite --host 0.0.0.0\"",
-    "build": "vite build && tsc -p server/tsconfig.json",
+    "build": "vite build && node scripts/clean-server-dist.mjs && tsc -p server/tsconfig.json",
     "start": "node server/dist/index.js",
     "test": "vitest run",
     "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json && vitest run",

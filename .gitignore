@@ -11,10 +11,11 @@ settings.local.*
 node_modules/
 dist/
 out/
-build/
-!build/
-build/*
-!build/installer.nsh
+**/.gradle/
+**/build/
+!/build/
+/build/*
+!/build/installer.nsh
 release/
 coverage/
 .cache/

@@ -1,14 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import ffprobe from 'ffprobe-static';
 import { db, getSetting } from './db.js';
 import { enrichMedia } from './tmdb.js';
 import { scanExtraLibraries } from './extra-media.js';
+import { probeMedia } from './media-info.js';
 
-const execFileAsync = promisify(execFile);
-const ffprobePath = ffprobe.path.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
 const VIDEO_EXTENSIONS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.m4v', '.webm', '.wmv', '.ts', '.m2ts']);
 const SUBTITLE_EXTENSIONS = ['.nl.vtt', '.nl.srt', '.vtt', '.srt'];
 const RELEASE_WORDS = /\b(2160p|1080p|720p|480p|bluray|brrip|webrip|web-dl|hdrip|dvdrip|x26[45]|h\.?26[45]|hevc|avc|aac|dts|remux|proper|repack|extended|multi|nlsubbed)\b.*$/i;
@@ -59,16 +55,6 @@ async function walk(dir: string): Promise<string[]> {
   return output;
 }
 
-async function probe(filePath: string) {
-  try {
-    const { stdout } = await execFileAsync(ffprobePath, ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath], { maxBuffer: 4 * 1024 * 1024, windowsHide: true });
-    const json = JSON.parse(stdout);
-    const video = json.streams?.find((x: any) => x.codec_type === 'video');
-    const audio = json.streams?.find((x: any) => x.codec_type === 'audio');
-    return { duration: Number(json.format?.duration) || null, videoCodec: video?.codec_name || null, audioCodec: audio?.codec_name || null, width: video?.width || null, height: video?.height || null, colorTransfer: video?.color_transfer || null };
-  } catch { return { duration: null, videoCodec: null, audioCodec: null, width: null, height: null, colorTransfer: null }; }
-}
-
 function subtitleFor(filePath: string): string | null {
   const stem = filePath.slice(0, -path.extname(filePath).length);
   return SUBTITLE_EXTENSIONS.map(ext => stem + ext).find(candidate => fs.existsSync(candidate)) || null;
@@ -85,18 +71,19 @@ export async function scanLibrary() {
     for (const source of sources) for (const file of await walk(source.path)) jobs.push({ source, file });
     scanState.total = jobs.length;
     const seen = new Set<string>();
-    const upsert = db.prepare(`INSERT INTO media_items(source_id, kind, title, sort_title, year, series_title, season, episode, file_path, subtitle_path, size, duration, video_codec, audio_codec, width, height, color_transfer)
-      VALUES(@sourceId, @kind, @title, @sortTitle, @year, @seriesTitle, @season, @episode, @filePath, @subtitlePath, @size, @duration, @videoCodec, @audioCodec, @width, @height, @colorTransfer)
+    const upsert = db.prepare(`INSERT INTO media_items(source_id, kind, title, sort_title, year, series_title, season, episode, file_path, subtitle_path, size, duration, video_codec, audio_codec, width, height, color_transfer,container,probe_json,video_profile,codec_level,pixel_format,bit_depth,frame_rate,bitrate,color_primaries,color_space,hdr_type,dolby_vision_profile,dolby_vision_layer,dolby_vision_enhancement,hdr10_compatibility_layer,audio_profile,audio_channels,audio_layout,atmos,dts_x,subtitle_format)
+      VALUES(@sourceId,@kind,@title,@sortTitle,@year,@seriesTitle,@season,@episode,@filePath,@subtitlePath,@size,@duration,@videoCodec,@audioCodec,@width,@height,@colorTransfer,@container,@probeJson,@videoProfile,@codecLevel,@pixelFormat,@bitDepth,@frameRate,@bitrate,@colorPrimaries,@colorSpace,@hdrType,@dolbyVisionProfile,@dolbyVisionLayer,@dolbyVisionEnhancement,@hdr10CompatibilityLayer,@audioProfile,@audioChannels,@audioLayout,@atmos,@dtsX,@subtitleFormat)
       ON CONFLICT(file_path) DO UPDATE SET source_id=excluded.source_id, kind=excluded.kind, title=excluded.title, sort_title=excluded.sort_title,
       year=excluded.year, series_title=excluded.series_title, season=excluded.season, episode=excluded.episode, subtitle_path=excluded.subtitle_path,
-      size=excluded.size, duration=excluded.duration, video_codec=excluded.video_codec, audio_codec=excluded.audio_codec, width=excluded.width, height=excluded.height, color_transfer=excluded.color_transfer, updated_at=CURRENT_TIMESTAMP`);
+      size=excluded.size,duration=excluded.duration,video_codec=excluded.video_codec,audio_codec=excluded.audio_codec,width=excluded.width,height=excluded.height,color_transfer=excluded.color_transfer,
+      container=excluded.container,probe_json=excluded.probe_json,video_profile=excluded.video_profile,codec_level=excluded.codec_level,pixel_format=excluded.pixel_format,bit_depth=excluded.bit_depth,frame_rate=excluded.frame_rate,bitrate=excluded.bitrate,color_primaries=excluded.color_primaries,color_space=excluded.color_space,hdr_type=excluded.hdr_type,dolby_vision_profile=excluded.dolby_vision_profile,dolby_vision_layer=excluded.dolby_vision_layer,dolby_vision_enhancement=excluded.dolby_vision_enhancement,hdr10_compatibility_layer=excluded.hdr10_compatibility_layer,audio_profile=excluded.audio_profile,audio_channels=excluded.audio_channels,audio_layout=excluded.audio_layout,atmos=excluded.atmos,dts_x=excluded.dts_x,subtitle_format=excluded.subtitle_format,updated_at=CURRENT_TIMESTAMP`);
 
     for (const job of jobs) {
       scanState.current = path.basename(job.file);
       seen.add(job.file.toLocaleLowerCase());
       try {
         const parsed = parseMediaName(job.file, job.source.path, job.source.kind);
-        const [stat, info] = await Promise.all([fs.promises.stat(job.file), probe(job.file)]);
+        const [stat, info] = await Promise.all([fs.promises.stat(job.file), probeMedia(job.file)]);
         upsert.run({ sourceId: job.source.id, ...parsed, year: parsed.year ?? null, seriesTitle: parsed.seriesTitle ?? null, season: parsed.season ?? null, episode: parsed.episode ?? null, filePath: job.file, subtitlePath: subtitleFor(job.file), size: stat.size, ...info });
       } catch { scanState.errors++; }
       scanState.scanned++;

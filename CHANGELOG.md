@@ -1,18 +1,20 @@
 # Wijzigingen
 
+## 1.2.0 — 13 juli 2026
+
+- Centrale capability-gestuurde Direct Play/Direct Stream/transcode-beslislaag met 35 playbacktests.
+- Uitgebreide FFprobe-opslag voor video, audio, HDR, Dolby Vision, Atmos, DTS:X, hoofdstukken en ondertitels.
+- Google Cast sender, mini-controller, signed media- en WebVTT-URL's en branded custom Web Receiver.
+- Veilig apparaatkoppelen, intrekbare device-sessies, remote-opdrachten en handmatige capability-overrides.
+- Native Android TV/Google TV-client met Media3/ExoPlayer/MediaSession; Samsung Tizen-clientbron met AVPlay.
+- Aparte privé-LAN-listener, LocalSubnet-firewallscript, HTTP Range/HEAD/OPTIONS en beperkte CORS.
+- Kwaliteitsprofielen, netwerkstandaarden, technische afspeelinformatie en ondertitel-burn-in wanneer noodzakelijk.
+- GitHub Releases-updater zonder token, exacte assetselectie, prereleasekanalen en gecontroleerde download naar LocalAppData.
+- Veilige release-, manifest-, hash-, secretscan- en conceptpublicatiescripts.
+- 70 geautomatiseerde tests en nieuwe installatie-, compatibiliteits-, beveiligings- en testdocumentatie.
+
 ## 1.1.0 — 13 juli 2026
 
-- Volledige hernoeming van Huiskamer naar ThuisHub, inclusief Windows-app, tray, installer, portable build, PWA, favicon en documentatie.
-- Nieuw aangeleverd ThuisHub-logo verwerkt in alle vereiste PNG-formaten en multi-resolutie ICO.
-- Veilige, eenmalige migratie van bestaande Huiskamer-gegevens met snapshot, integriteitscontrole, log en behoud van het origineel.
-- Server beperkt tot `127.0.0.1:8787`; Tailscale Serve-status, dashboard en PowerShell-beheer toegevoegd.
-- Dagelijkse, wekelijkse en handmatige back-ups, retentie, aangepaste locatie, verificatie, download en herstel bij herstart.
-- Database-integriteitscontrole, onverwachte-afsluitcontrole, noodback-ups, export en bibliotheekherbouw.
-- Gestructureerde logcategorieën, geheimenmaskering, niveaus, filters, download, opschoning en rotatie.
-- Uitbreidbare updatecontrole met stabiel/bèta/ontwikkeling, release notes, downloadgrootte en verplichte SHA-256-controle.
-- Vernieuwd serverdashboard met twaalf beheeronderdelen en uitgebreide waarschuwingen/statusinformatie.
-- Uitgebreid systeemvakmenu en Starten-met-Windows-schakelaar.
-- Buildproces voorbereid op echte Authenticode-code signing; unsigned builds blijven ondersteund.
-- Geautomatiseerde regressie-, migratie-, back-up-, update-, logging-, Tailscale- en distributietests toegevoegd.
-
-Alle bestaande media-, gebruikers-, download-, PWA-, Live TV-, DVR- en transcodefuncties zijn behouden.
+- Hernoeming van Huiskamer naar ThuisHub en Windows installer/portable-app.
+- Veilige gegevensmigratie, lokale beheerinterface, Tailscale Serve, back-ups, databasecontrole, logging en serverdashboard.
+- Films, series, muziek, foto's, Live TV, DVR, gebruikers, voortgang en bestaande web/PWA-functies behouden.

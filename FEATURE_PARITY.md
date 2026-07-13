@@ -1,25 +1,18 @@
-# ThuisHub functiepariteit
+# ThuisHub functiepariteit 1.2.0
 
-## Beschikbaar in 1.1.0
+| Onderdeel | Status | Opmerking |
+|---|---|---|
+| Windows-app, browser en PWA | Beschikbaar | Zelfde lokale server en database. |
+| Films, series, muziek, foto's, Live TV en DVR | Beschikbaar | Bestaande 1.1-functies behouden. |
+| Direct Play / Direct Stream / Transcode | Beschikbaar | Eén centrale beslisengine; FFmpeg voor remux/transcode. |
+| HDR10, HDR10+, HLG, Dolby Vision-detectie | Beschikbaar | Behoud bij stream-copy; geldige fallback of SDR-tone-map. |
+| Atmos, TrueHD, E-AC-3, DTS-passthroughbeslissing | Beschikbaar | Alleen wanneer capabilityketen dit toestaat. |
+| Google Cast | Beschikbaar, hardwaretest vereist | Standaardreceiver direct; eigen receiver vereist geregistreerd App ID/HTTPS. |
+| Android TV / Google TV | Test-APK beschikbaar | Koppelen, bibliotheek, afspelen, MediaSession, tracks, voortgang en remote-opdrachten. Uitgebreide native zoek/Live TV-schermen zijn nog vervolgwerk. |
+| Samsung Tizen | Bron beschikbaar | WGT vereist lokale Tizen SDK en Samsung-certificaat; hardwaretest vereist. |
+| DLNA/UPnP-afspelen | Niet ingebouwd | Er wordt bewust geen UPnP-portforwarding gebruikt. Externe DLNA-speler kan signed HTTP-bronnen niet automatisch ontdekken. |
+| Apple TV-client | Uitbreidingspunt | Nog geen tvOS-client. Browser/AirPlay-schermspiegeling is geen primaire afspeelmethode. |
+| Multi-variant adaptive bitrate | Beperkt | HLS-profiel wordt centraal gekozen; wisselen van kwaliteit start een passend profiel. Geen gelijktijdige masterplaylist met alle varianten. |
+| GitHub Releases-updates | Beschikbaar | Download/controle wel; installatie blijft bewust handmatig en vereist toestemming. |
 
-- Films, series/seizoenen/afleveringen, muziek en foto's
-- Browser-, PWA- en zelfstandige Windows-app
-- Direct play, HTTP byte ranges, HLS en adaptieve transcoding
-- Hardwaretranscoding (NVIDIA, Intel, AMD waar FFmpeg/driver dit ondersteunt)
-- HDR-tone-mapping, ondertitels, audiotracks en downloads
-- Kijkvoortgang, hervatten, autoplay, intro- en aftitelingmarkers
-- Gebruikersprofielen, pincode, leeftijdsbeperkingen en beheerdersrollen
-- Favorieten, afspeellijsten, collecties en metadatawijzigingen
-- Live TV via M3U, XMLTV-programmagids en DVR-planning/opnames
-- Actieve streams, optimalisaties en transcodestatus
-- Webhooks en lokale API
-- Privétoegang via Tailscale Serve
-- Automatische en handmatige, gecontroleerde SQLite-back-ups en veilig herstel
-- Gestructureerde, geroteerde logboeken en serverdashboard
-- Uitbreidbare updateprovider met kanaalkeuze en SHA-256-controle
-
-## Bewust anders of niet inbegrepen
-
-ThuisHub bevat geen Plex-code, Plex-merkonderdelen of omzeiling van betaalde diensten. Gelicentieerde advertentiefilms, commerciële internet-tv, huurfilms, centrale cloudaccounts en partnerdiensten vereisen externe rechten/infrastructuur en zijn niet ingebouwd. ThuisHub beheert eigen media en bronnen waarvoor de gebruiker toegang heeft.
-
-De kwaliteit van hardwaretranscoding, HDR, ondertitels en tunerbronnen hangt af van FFmpeg, videodrivers en het bronformaat. Externe toegang blijft privé en vereist dat elk apparaat bij hetzelfde Tailscale-netwerk is aangemeld.
+ThuisHub bevat geen Plex-code of -merken en ontgrendelt geen betaalde diensten. Internet-tv, huurfilms en partnercontent vereisen eigen legale bronnen en rechten.

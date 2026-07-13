@@ -14,7 +14,7 @@ describe('Windows-distributie', () => {
 
   it('configureert portable, installer en veilige upgrade', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
-    expect(packageJson.version).toBe('1.1.0');
+    expect(packageJson.version).toBe('1.2.0');
     expect(packageJson.build.nsis.artifactName).toContain('ThuisHub-Setup');
     expect(packageJson.build.portable.artifactName).toContain('ThuisHub-Portable');
     expect(packageJson.build.appId).toBe('nl.huiskamer.media');

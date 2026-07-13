@@ -7,57 +7,83 @@ import { log } from './logger.js';
 import { appPaths } from './paths.js';
 
 export type UpdateChannel = 'stable' | 'beta' | 'development';
-export type UpdateManifest = { version: string; channel: UpdateChannel; downloadUrl: string; sha256: string; releaseNotes: string; size?: number };
+export type UpdateManifest = {
+  product?: string; version: string; channel: UpdateChannel; tag?: string; downloadUrl: string; sha256: string; releaseNotes: string;
+  size?: number; publishedAt?: string; releasePage?: string; assetName?: string; githubDigest?: string; minimumSupportedVersion?: string;
+};
+type GitHubAsset = { name:string; browser_download_url:string; size:number; digest?:string };
+type GitHubRelease = { tag_name:string; name?:string; body?:string; html_url:string; published_at?:string; draft:boolean; prerelease:boolean; assets:GitHubAsset[] };
+
+const GITHUB_REPOSITORY='kratje050/thuishub';
+const GITHUB_API=`https://api.github.com/repos/${GITHUB_REPOSITORY}`;
+const headers={Accept:'application/vnd.github+json','User-Agent':`ThuisHub-Updater/${APP_VERSION}`,'X-GitHub-Api-Version':'2022-11-28'};
 
 function compareVersions(left: string, right: string) {
-  const a = left.split(/[.-]/).map(value => Number(value) || 0);
-  const b = right.split(/[.-]/).map(value => Number(value) || 0);
-  for (let index = 0; index < Math.max(a.length, b.length); index += 1) if ((a[index] || 0) !== (b[index] || 0)) return (a[index] || 0) > (b[index] || 0) ? 1 : -1;
-  return 0;
+  const clean=(value:string)=>value.replace(/^v/i,'').split('+')[0];
+  const parse=(value:string)=>{const[main,pre='']=clean(value).split('-',2);return{parts:main.split('.').map(x=>Number(x)||0),pre}};
+  const a=parse(left),b=parse(right);for(let index=0;index<Math.max(a.parts.length,b.parts.length);index++){const delta=(a.parts[index]||0)-(b.parts[index]||0);if(delta)return delta>0?1:-1}
+  if(a.pre===b.pre)return 0;if(!a.pre)return 1;if(!b.pre)return-1;return a.pre.localeCompare(b.pre,undefined,{numeric:true})>0?1:-1;
 }
 
-function validateManifest(value: any): UpdateManifest {
-  if (!value || !/^\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.-]+)?$/.test(value.version) || !['stable', 'beta', 'development'].includes(value.channel) || typeof value.downloadUrl !== 'string' || !/^https:\/\//i.test(value.downloadUrl) || !/^[a-f0-9]{64}$/i.test(value.sha256)) {
-    throw new Error('Het update-manifest is ongeldig.');
+function validVersion(value:string){return /^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(value)}
+function exactAsset(release:GitHubRelease,name:string){return release.assets.find(asset=>asset.name===name)}
+
+async function fetchJson(fetcher:typeof fetch,url:string){const response=await fetcher(url,{headers,signal:AbortSignal.timeout(8000)});if(!response.ok)throw Object.assign(new Error(`GitHub antwoordde met ${response.status}.`),{status:response.status});return response.json()}
+async function fetchText(fetcher:typeof fetch,url:string){const response=await fetcher(url,{headers,signal:AbortSignal.timeout(8000)});if(!response.ok)throw new Error(`Release-asset antwoordde met ${response.status}.`);return response.text()}
+
+function selectRelease(releases:GitHubRelease[],channel:UpdateChannel){return releases.filter(release=>!release.draft&&validVersion(release.tag_name)&&(channel!=='stable'||!release.prerelease)).sort((a,b)=>compareVersions(b.tag_name,a.tag_name))[0]}
+
+async function manifestFromRelease(release:GitHubRelease,channel:UpdateChannel,fetcher:typeof fetch):Promise<UpdateManifest>{
+  const version=release.tag_name.replace(/^v/i,'');const setupName=`ThuisHub-Setup-${version}.exe`;const setup=exactAsset(release,setupName);
+  if(!setup)throw new Error(`De vereiste release-asset ${setupName} ontbreekt.`);
+  let publishedManifest:any={};let sums='';
+  const manifestAsset=exactAsset(release,'latest.json');const sumsAsset=exactAsset(release,'SHA256SUMS.txt');
+  if(manifestAsset){try{publishedManifest=JSON.parse(await fetchText(fetcher,manifestAsset.browser_download_url))}catch{throw new Error('latest.json is beschadigd of niet leesbaar.')}}
+  if(sumsAsset)sums=await fetchText(fetcher,sumsAsset.browser_download_url);
+  const manifestHash=publishedManifest?.assets?.setup?.name===setupName?publishedManifest.assets.setup.sha256:'';
+  const sumsHash=sums.split(/\r?\n/).map(line=>line.trim().split(/\s+[*]?/)).find(parts=>parts[1]===setupName)?.[0]||'';
+  const digest=String(setup.digest||'').replace(/^sha256:/i,'');const sha256=String(manifestHash||sumsHash||digest).toLowerCase();
+  if(!/^[a-f0-9]{64}$/.test(sha256))throw new Error('De release bevat geen geldige SHA-256 voor de exacte installerasset.');
+  if(manifestHash&&sumsHash&&manifestHash.toLowerCase()!==sumsHash.toLowerCase())throw new Error('latest.json en SHA256SUMS.txt spreken elkaar tegen.');
+  if(digest&&sha256!==digest.toLowerCase())throw new Error('De GitHub asset-digest komt niet overeen met het release-manifest.');
+  return{product:'ThuisHub',version,channel,tag:release.tag_name,downloadUrl:setup.browser_download_url,sha256,releaseNotes:release.body||'',size:setup.size,publishedAt:release.published_at,releasePage:release.html_url,assetName:setupName,githubDigest:digest||undefined,minimumSupportedVersion:publishedManifest.minimumSupportedVersion};
+}
+
+export async function checkForUpdates(fetcher:typeof fetch=fetch){
+  const channel=getSetting('updateChannel','stable') as UpdateChannel;
+  if(channel==='development'&&getSetting('developmentUpdatesEnabled','false')!=='true')return{configured:true,currentVersion:APP_VERSION,available:false,channel,message:'Ontwikkelingsupdates zijn uitgeschakeld in geavanceerde instellingen.'};
+  try{
+    let release:GitHubRelease|undefined;
+    if(channel==='stable')release=await fetchJson(fetcher,`${GITHUB_API}/releases/latest`) as GitHubRelease;
+    else{const list=await fetchJson(fetcher,`${GITHUB_API}/releases?per_page=30`) as GitHubRelease[];release=selectRelease(list,channel)}
+    if(!release||release.draft||channel==='stable'&&release.prerelease) return{configured:true,currentVersion:APP_VERSION,available:false,channel,message:'Er is nog geen officiële ThuisHub-release gepubliceerd.'};
+    const manifest=await manifestFromRelease(release,channel,fetcher);const available=compareVersions(manifest.version,APP_VERSION)>0;
+    const result={...manifest,available};setSetting('lastUpdateCheckAt',new Date().toISOString());setSetting('lastUpdateResult',JSON.stringify(result));
+    log('INFO','updater','GitHub Releases-updatecontrole voltooid.',{currentVersion:APP_VERSION,remoteVersion:manifest.version,channel,available,asset:manifest.assetName});
+    return{configured:true,currentVersion:APP_VERSION,available,channel,manifest,message:available?`ThuisHub ${manifest.version} is beschikbaar.`:'ThuisHub is bijgewerkt. Je gebruikt de nieuwste stabiele versie.'};
+  }catch(error:any){
+    const noRelease=error?.status===404;log(noRelease?'INFO':'WARNING','updater',noRelease?'Er is nog geen officiële release.':'GitHub-updatecontrole mislukt; de huidige installatie blijft actief.',{status:error?.status,error:error?.message});
+    return{configured:true,currentVersion:APP_VERSION,available:false,channel,offline:!noRelease,message:noRelease?'Er is nog geen officiële ThuisHub-release gepubliceerd.':'De updatecontrole kon GitHub niet bereiken. Je huidige versie blijft gewoon werken.'};
   }
-  return value;
 }
 
-export async function checkForUpdates(fetcher: typeof fetch = fetch) {
-  const manifestUrl = getSetting('updateManifestUrl', process.env.THUIS_HUB_UPDATE_MANIFEST || '');
-  const channel = getSetting('updateChannel', 'stable') as UpdateChannel;
-  if (!manifestUrl) return { configured: false, currentVersion: APP_VERSION, available: false, channel, message: 'Er is nog geen updatebron ingesteld.' };
-  try {
-    const response = await fetcher(manifestUrl, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
-    if (!response.ok) throw new Error(`Updatebron antwoordde met ${response.status}.`);
-    const manifest = validateManifest(await response.json());
-    const allowed = channel === 'development' || channel === 'beta' && manifest.channel !== 'development' || channel === 'stable' && manifest.channel === 'stable';
-    const available = allowed && compareVersions(manifest.version, APP_VERSION) > 0;
-    setSetting('lastUpdateCheckAt', new Date().toISOString());
-    setSetting('lastUpdateResult', JSON.stringify({ ...manifest, available }));
-    log('INFO', 'updater', 'Updatecontrole voltooid.', { currentVersion: APP_VERSION, remoteVersion: manifest.version, channel, available });
-    return { configured: true, currentVersion: APP_VERSION, available, channel, manifest, message: available ? `ThuisHub ${manifest.version} is beschikbaar.` : 'ThuisHub is actueel.' };
-  } catch (error) {
-    log('WARNING', 'updater', 'Updatecontrole mislukt; de huidige installatie blijft actief.', { error: error instanceof Error ? error.message : String(error) });
-    return { configured: true, currentVersion: APP_VERSION, available: false, channel, offline: true, message: 'De updatebron is momenteel niet bereikbaar.' };
-  }
+let downloadInProgress=false;
+export async function downloadUpdate(manifest:UpdateManifest,fetcher:typeof fetch=fetch){
+  if(downloadInProgress)throw new Error('Er is al een update-download actief.');
+  const expectedName=manifest.assetName||`ThuisHub-Setup-${manifest.version}.exe`;
+  const expectedPrefix=`https://github.com/${GITHUB_REPOSITORY}/releases/download/`;
+  if(!validVersion(manifest.version)||!manifest.downloadUrl.startsWith(expectedPrefix)||expectedName!==`ThuisHub-Setup-${manifest.version}.exe`||!/^[a-f0-9]{64}$/i.test(manifest.sha256))throw new Error('Het update-manifest is ongeldig.');
+  downloadInProgress=true;fs.mkdirSync(appPaths.updatesDir,{recursive:true});const name=manifest.assetName||`ThuisHub-Setup-${manifest.version}.exe`;const target=path.join(appPaths.updatesDir,path.basename(name));const temporary=`${target}.${crypto.randomBytes(5).toString('hex')}.part`;
+  try{
+    const response=await fetcher(manifest.downloadUrl,{headers,signal:AbortSignal.timeout(180000)});if(!response.ok)throw new Error(`Download mislukt (${response.status}).`);
+    const bytes=Buffer.from(await response.arrayBuffer());fs.writeFileSync(temporary,bytes);
+    if(manifest.size&&bytes.length!==manifest.size)throw new Error('De downloadgrootte komt niet overeen met de GitHub-release.');
+    const hash=crypto.createHash('sha256').update(bytes).digest('hex');if(hash.toLowerCase()!==manifest.sha256.toLowerCase())throw new Error('De integriteitscontrole van de update is mislukt. De huidige installatie blijft ongewijzigd.');
+    if(manifest.githubDigest&&hash.toLowerCase()!==manifest.githubDigest.toLowerCase())throw new Error('De GitHub asset-digest is ongeldig.');
+    fs.renameSync(temporary,target);log('INFO','updater','GitHub-update gedownload; grootte en SHA-256 zijn gecontroleerd.',{version:manifest.version,file:target,bytes:bytes.length});
+    return{file:target,bytes:bytes.length,sha256:hash,sha256Verified:true,digitallySigned:false,installRequiresConsent:true};
+  }catch(error){fs.rmSync(temporary,{force:true});fs.rmSync(target,{force:true});log('CRITICAL','updater','Updatebestand geweigerd; huidige installatie blijft actief.',{error:error instanceof Error?error.message:String(error)});throw error}
+  finally{downloadInProgress=false}
 }
 
-export async function downloadUpdate(manifest: UpdateManifest, fetcher: typeof fetch = fetch) {
-  const valid = validateManifest(manifest);
-  fs.mkdirSync(appPaths.updatesDir, { recursive: true });
-  const response = await fetcher(valid.downloadUrl, { signal: AbortSignal.timeout(120000) });
-  if (!response.ok) throw new Error(`Download mislukt (${response.status}).`);
-  const bytes = Buffer.from(await response.arrayBuffer());
-  const hash = crypto.createHash('sha256').update(bytes).digest('hex');
-  if (hash.toLowerCase() !== valid.sha256.toLowerCase()) {
-    log('CRITICAL', 'updater', 'Updatebestand geweigerd door onjuiste SHA-256-hash.', { expected: valid.sha256, actual: hash });
-    throw new Error('De integriteitscontrole van de update is mislukt. De huidige installatie blijft ongewijzigd.');
-  }
-  const target = path.join(appPaths.updatesDir, `ThuisHub-${valid.version}.exe`);
-  fs.writeFileSync(target, bytes);
-  log('INFO', 'updater', 'Update gedownload en SHA-256 gecontroleerd.', { version: valid.version, file: target, bytes: bytes.length });
-  return { file: target, bytes: bytes.length, sha256: hash, installRequiresConsent: true };
-}
-
-export const updateInternals = { compareVersions, validateManifest };
+export const updateInternals={compareVersions,selectRelease,manifestFromRelease,exactAsset,headers,GITHUB_API,setDownloadInProgress:(value:boolean)=>downloadInProgress=value};

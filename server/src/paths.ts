@@ -8,6 +8,7 @@ export type AppPaths = ReturnType<typeof resolveAppPaths>;
 
 export function resolveAppPaths(env: NodeJS.ProcessEnv = process.env) {
   const appData = env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const localAppData = env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
   const dataDir = path.resolve(env.THUIS_HUB_DATA_DIR || env.HUISKAMER_DATA_DIR || 'data');
   const appRoot = env.THUIS_HUB_ROOT_DIR
     ? path.resolve(env.THUIS_HUB_ROOT_DIR)
@@ -20,7 +21,7 @@ export function resolveAppPaths(env: NodeJS.ProcessEnv = process.env) {
     logsDir: path.resolve(env.THUIS_HUB_LOG_DIR || path.join(appRoot, 'logs')),
     backupsDir: path.resolve(env.THUIS_HUB_BACKUP_DIR || path.join(appRoot, 'backups')),
     exportsDir: path.join(appRoot, 'exports'),
-    updatesDir: path.join(appRoot, 'updates'),
+    updatesDir: path.join(localAppData, 'ThuisHub', 'updates'),
     migrationMarker: path.join(appRoot, '.migration-from-huiskamer.json'),
     pendingRestoreMarker: path.join(appRoot, '.restore-pending.json'),
     legacyRoot: path.join(appData, 'Huiskamer'),
@@ -125,4 +126,3 @@ export function applyPendingRestore(paths: AppPaths = appPaths) {
 }
 
 export const pathInternals = { quickCheck, safeDatabaseSnapshot };
-
