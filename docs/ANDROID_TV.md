@@ -10,7 +10,7 @@ Installeer Android Studio met SDK Platform 35 en voer uit:
 .\scripts\build-android-tv.ps1
 ```
 
-Uitvoer: `release\ThuisHub-Android-TV-1.2.0.apk`. Dit is een lokaal debug-ondertekende APK voor sideloadtests, geen Play Store-release. Installeer bijvoorbeeld met `adb install -r <apk>` op een apparaat waarvoor USB/netwerkdebugging bewust is ingeschakeld.
+Uitvoer: `release\ThuisHub-Android-TV-1.2.1.apk`. Dit is een lokaal debug-ondertekende APK voor sideloadtests, geen Play Store-release. Installeer bijvoorbeeld met `adb install -r <apk>` op een apparaat waarvoor USB/netwerkdebugging bewust is ingeschakeld.
 
 ## Gebruik
 

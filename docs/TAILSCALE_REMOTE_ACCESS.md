@@ -22,6 +22,6 @@ Installeer Tailscale uit de appstore van het apparaat, meld aan bij hetzelfde ta
 
 ## Controle
 
-Controleer na inrichting login, film/muziek, ondertitels, downloads, hervatten en Live TV. ThuisHub gebruikt dezelfde geauthenticeerde HTTP-routes, byte ranges en HLS-transcodes via de HTTPS-proxy. WebSocket-upgrades worden door Tailscale Serve ondersteund; ThuisHub 1.1.0 gebruikt voor status en voortgang hoofdzakelijk gewone HTTP-aanvragen. DVR-opnames blijven op de server-pc draaien.
+Controleer na inrichting dat ThuisHub direct opent en test film/muziek, ondertitels, downloads, hervatten en Live TV. ThuisHub gebruikt dezelfde HTTP-routes, byte ranges en HLS-transcodes via de HTTPS-proxy. WebSocket-upgrades worden door Tailscale Serve ondersteund; ThuisHub gebruikt voor status en voortgang hoofdzakelijk gewone HTTP-aanvragen. DVR-opnames blijven op de server-pc draaien.
 
 Bij problemen controleer je achtereenvolgens: ThuisHub lokaal, Tailscale **Running**, beide apparaten in hetzelfde tailnet en `tailscale serve status --json` met een proxy naar `http://127.0.0.1:8787`.

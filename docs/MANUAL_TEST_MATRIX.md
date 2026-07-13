@@ -1,10 +1,10 @@
-# Handmatige testmatrix 1.2.0
+# Handmatige testmatrix 1.2.1
 
 Automatische tests bewijzen beslislogica en updatebeveiliging, maar niet de fysieke HDMI/display/audio-uitvoer. Noteer per combinatie resultaat, mediafixture, apparaatfirmware en waargenomen tv/receiver-info.
 
 | Doel | Test | Verwacht | Status op buildmoment |
 |---|---|---|---|
-| Android-telefoon/PWA | login, afspelen, Cast-controller | signed stream, voortgang, bediening | Nog handmatig testen |
+| Android-telefoon/PWA | direct openen, afspelen, Cast-controller | geen inlogscherm, signed stream, voortgang, bediening | Nog handmatig testen |
 | Chromecast | kiezen, Direct Play/HLS, Range/CORS, hervatten | tv haalt URL rechtstreeks op | Geen Cast-hardwaretest uitgevoerd |
 | Google TV | H.264/HEVC, tracks, HDR | juiste decision/badge | Geen hardwaretest uitgevoerd |
 | Android TV-emulator | pairing, bibliotheek, ExoPlayer, MediaSession | code + playback + voortgang | APK gebouwd; emulator nog testen |

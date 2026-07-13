@@ -24,6 +24,33 @@ export function hasUsers(): boolean {
   return (db.prepare('SELECT COUNT(*) count FROM users').get() as { count: number }).count > 0;
 }
 
+function userFromRow(row: User): User {
+  return { ...row, canDownload: row.canDownload === undefined ? undefined : Boolean(row.canDownload) };
+}
+
+/**
+ * ThuisHub is een persoonlijke mediaserver zonder inlogscherm. Gebruik het
+ * bestaande beheerdersprofiel, of maak bij de eerste start automatisch een
+ * lokaal profiel aan. Het willekeurige wachtwoord is niet bruikbaar en wordt
+ * uitsluitend opgeslagen omdat oudere databases dit veld verplicht stellen.
+ */
+export function ensureLocalOwner(): User {
+  const select = `SELECT id, username, role, max_content_rating maxContentRating,
+    can_download canDownload FROM users`;
+  const admin = db.prepare(`${select} WHERE role = 'admin' ORDER BY id LIMIT 1`).get() as User | undefined;
+  if (admin) return userFromRow(admin);
+
+  const existing = db.prepare(`${select} ORDER BY id LIMIT 1`).get() as User | undefined;
+  if (existing) {
+    db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(existing.id);
+    return userFromRow({ ...existing, role: 'admin' });
+  }
+
+  const passwordHash = bcrypt.hashSync(crypto.randomBytes(48).toString('base64url'), 12);
+  const result = db.prepare("INSERT INTO users(username, password_hash, role) VALUES('Beheerder', ?, 'admin')").run(passwordHash);
+  return { id: Number(result.lastInsertRowid), username: 'Beheerder', role: 'admin', maxContentRating: 'ALL', canDownload: true };
+}
+
 export async function createUser(username: string, password: string, role: 'admin' | 'user' = 'user') {
   const passwordHash = await bcrypt.hash(password, 12);
   const result = db.prepare('INSERT INTO users(username, password_hash, role) VALUES(?, ?, ?)').run(username.trim(), passwordHash, role);
@@ -50,12 +77,7 @@ export function endSession(req: Request, res: Response) {
 }
 
 export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
-  const token = parseCookies(req.headers.cookie)[COOKIE];
-  if (token) {
-    const row = db.prepare(`SELECT u.id, u.username, u.role, u.max_content_rating maxContentRating, u.can_download canDownload FROM sessions s
-      JOIN users u ON u.id = s.user_id WHERE s.token_hash = ? AND s.expires_at > ?`).get(hashToken(token), Date.now()) as User | undefined;
-    if (row) req.user = row;
-  }
+  req.user = ensureLocalOwner();
   next();
 }
 

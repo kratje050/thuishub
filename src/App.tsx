@@ -8,7 +8,7 @@ type View = 'home' | 'movies' | 'series' | 'music' | 'photos' | 'live' | 'watchl
 type MusicTrack={id:number;title:string;artist:string;album:string;albumArtist?:string;track?:number;disc?:number;year?:number;duration?:number;coverUrl?:string;genres:string[]};
 type PhotoItem={id:number;title:string;width?:number;height?:number;takenAt?:string;size:number;thumbnailUrl:string;originalUrl:string};
 
-function Icon({ name }: { name: 'home' | 'movie' | 'series' | 'music' | 'photos' | 'live' | 'watchlist' | 'settings' | 'search' | 'play' | 'close' | 'folder' | 'refresh' | 'logout' | 'download' | 'heart' | 'check' | 'plus' }) {
+function Icon({ name }: { name: 'home' | 'movie' | 'series' | 'music' | 'photos' | 'live' | 'watchlist' | 'settings' | 'search' | 'play' | 'close' | 'folder' | 'refresh' | 'download' | 'heart' | 'check' | 'plus' }) {
   const paths: Record<string, React.ReactNode> = {
     home: <><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10M9 20v-6h6v6"/></>,
     movie: <><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M7 5 9 2m3 3 2-3m3 3 2-3M3 10h18"/></>,
@@ -19,8 +19,7 @@ function Icon({ name }: { name: 'home' | 'movie' | 'series' | 'music' | 'photos'
     close: <path d="M6 6l12 12M18 6 6 18"/>,
     folder: <path d="M3 6h7l2 2h9v11H3Z"/>,
     refresh: <><path d="M20 7v5h-5"/><path d="M18.5 16a8 8 0 1 1 .5-8l1 4"/></>,
-    logout: <><path d="M10 4H4v16h6M14 8l4 4-4 4m4-4H8"/></>
-    ,watchlist: <><path d="M5 5h14M5 12h9M5 19h14"/><path d="m17 10 4 2-4 2Z"/></>,
+    watchlist: <><path d="M5 5h14M5 12h9M5 19h14"/><path d="m17 10 4 2-4 2Z"/></>,
     download: <><path d="M12 3v12m-5-5 5 5 5-5"/><path d="M5 21h14"/></>,
     heart: <path d="M20.8 5.7a5.4 5.4 0 0 0-7.6 0L12 6.9l-1.2-1.2a5.4 5.4 0 0 0-7.6 7.6L12 22l8.8-8.7a5.4 5.4 0 0 0 0-7.6Z"/>,
     check: <path d="m5 12 4 4L19 6"/>,
@@ -30,36 +29,6 @@ function Icon({ name }: { name: 'home' | 'movie' | 'series' | 'music' | 'photos'
     live: <><rect x="3" y="5" width="18" height="15" rx="2"/><path d="m8 2 4 3 4-3M8 10l7 3-7 3Z"/></>
   };
   return <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>{paths[name]}</svg>;
-}
-
-function AuthScreen({ setupRequired, onAuthenticated }: { setupRequired: boolean; onAuthenticated: (user: User) => void }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  async function submit(e: React.FormEvent) {
-    e.preventDefault(); setError(''); setBusy(true);
-    try {
-      const result = await post<{ user: User }>(setupRequired ? '/auth/setup' : '/auth/login', { username, password });
-      onAuthenticated(result.user);
-    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
-  }
-  return <main className="auth-page">
-    <div className="auth-glow" />
-    <section className="auth-card">
-      <img className="auth-logo" src="/brand/thuishub-logo.png" alt="ThuisHub"/>
-      <p className="eyebrow">JOUW EIGEN MEDIATHEEK</p>
-      <h1>{setupRequired ? 'Welkom bij ThuisHub' : 'Welkom terug'}</h1>
-      <p className="muted">{setupRequired ? 'Maak je beheerdersaccount aan om je eerste bibliotheek in te richten.' : 'Log in om verder te kijken.'}</p>
-      <form onSubmit={submit}>
-        <label>Gebruikersnaam<input autoFocus autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} placeholder="Bijvoorbeeld Stefan" /></label>
-        <label>Wachtwoord<input type="password" autoComplete={setupRequired ? 'new-password' : 'current-password'} value={password} onChange={e => setPassword(e.target.value)} placeholder={setupRequired ? 'Minimaal 8 tekens' : '••••••••'} /></label>
-        {error && <div className="alert error">{error}</div>}
-        <button className="primary wide" disabled={busy}>{busy ? 'Even geduld…' : setupRequired ? 'Account aanmaken' : 'Inloggen'}</button>
-      </form>
-      <p className="auth-foot">Lokaal op jouw pc · Geen abonnement · Jouw bestanden</p>
-    </section>
-  </main>;
 }
 
 function MediaCard({ item, subtitle, onClick }: { item: MediaItem; subtitle?: string; onClick: () => void }) {
@@ -271,7 +240,6 @@ function SettingsPanel({ bootstrap, reload, refreshLibrary }: { bootstrap: Boots
 }
 
 export default function App() {
-  const [auth, setAuth] = useState<{ loading: boolean; setupRequired: boolean; user: User | null }>({loading:true,setupRequired:false,user:null});
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [library, setLibrary] = useState<MediaItem[]>([]);
   const initialView=(new URLSearchParams(location.search).get('view')||'home') as View;
@@ -291,9 +259,9 @@ export default function App() {
   const loadLibrary = useCallback(async () => { const data = await api<MediaItem[]>('/library'); setLibrary(data); }, []);
   const loadPlaylists=useCallback(async()=>setPlaylists(await api('/playlists')),[]);
   const loadExtras=useCallback(async()=>{const[tracks,pictures]=await Promise.all([api<MusicTrack[]>('/music'),api<PhotoItem[]>('/photos')]);setMusic(tracks);setPhotos(pictures)},[]);
-  const initialize = useCallback(async () => { try { await Promise.all([loadBootstrap(),loadLibrary(),loadPlaylists(),loadExtras()]); } catch(e:any) { if(e.status===401) setAuth(a=>({...a,user:null})); else setLoadError(e.message); } }, [loadBootstrap,loadLibrary,loadPlaylists,loadExtras]);
+  const initialize = useCallback(async () => { try { setLoadError(''); await Promise.all([loadBootstrap(),loadLibrary(),loadPlaylists(),loadExtras()]); } catch(e:any) { setLoadError(e.message || 'ThuisHub kon niet worden geladen.'); } }, [loadBootstrap,loadLibrary,loadPlaylists,loadExtras]);
 
-  useEffect(() => { api<{setupRequired:boolean;user:User|null}>('/auth/status').then(status=>{setAuth({loading:false,...status}); if(status.user) void initialize();}).catch(()=>setAuth({loading:false,setupRequired:false,user:null})); }, []);
+  useEffect(() => { void initialize(); }, [initialize]);
   useEffect(() => {
     if (!bootstrap?.scan.running) return;
     const timer = setInterval(async()=>{ const scan=await api<ScanState>('/scan'); setBootstrap(b=>b?{...b,scan}:b); if(!scan.running){clearInterval(timer);await loadLibrary();}},1200);
@@ -318,13 +286,11 @@ export default function App() {
   const saveEdited=useCallback((updated:MediaItem)=>{setLibrary(items=>items.map(x=>x.id===updated.id?updated:x));setSelected(current=>current?{...current,item:current.item.id===updated.id?updated:current.item}:current);},[]);
   const nextItem=useMemo(()=>{if(!playing)return null;if(playing.kind==='episode'&&playing.seriesTitle){const eps=series.find(x=>x.title===playing.seriesTitle)?.episodes||[];const index=eps.findIndex(x=>x.id===playing.id);return index>=0?eps[index+1]||null:null;}return null;},[playing,series]);
 
-  if(auth.loading) return <div className="splash"><img className="splash-logo" src="/brand/thuishub-icon-256.png" alt="ThuisHub"/></div>;
-  if(!auth.user) return <AuthScreen setupRequired={auth.setupRequired} onAuthenticated={user=>{setAuth({loading:false,setupRequired:false,user});void initialize();}}/>;
-  if(!bootstrap) return <div className="splash"><span className="spinner" />{loadError&&<div className="alert error">{loadError}</div>}</div>;
+  if(!bootstrap) return <div className="splash"><img className="splash-logo" src="/brand/thuishub-icon-256.png" alt="ThuisHub"/>{loadError?<><div className="alert error">{loadError}</div><button className="primary" onClick={()=>void initialize()}>Opnieuw proberen</button></>:<span className="spinner" />}</div>;
 
   const nav=(next:View)=>{setView(next);setSearch('');window.scrollTo(0,0);};
   return <div className="app-shell">
-    <aside className="sidebar"><button className="brand" onClick={()=>nav('home')}><img className="sidebar-logo" src="/brand/thuishub-icon-128.png" alt=""/><span>{bootstrap.settings.serverName}</span></button><nav>{([['home','home','Start'],['movies','movie','Films'],['series','series','Series'],['music','music','Muziek'],['photos','photos','Foto’s'],['live','live','Live TV'],['watchlist','watchlist','Mijn lijst'],...(auth.user.role==='admin'?[['dashboard','settings','Dashboard']]:[]),['settings','settings','Instellingen']] as [View,any,string][]).map(([id,icon,label])=><button key={id} className={view===id?'active':''} onClick={()=>nav(id)}><Icon name={icon}/><span>{label}</span></button>)}</nav><div className="sidebar-user"><div className="avatar">{auth.user.username.slice(0,1).toUpperCase()}</div><span><strong>{auth.user.username}</strong><small>{auth.user.role==='admin'?'Beheerder':'Gebruiker'}</small></span><button title="Uitloggen" onClick={async()=>{await post('/auth/logout');setAuth({loading:false,setupRequired:false,user:null});setBootstrap(null);}}><Icon name="logout"/></button></div></aside>
+    <aside className="sidebar"><button className="brand" onClick={()=>nav('home')}><img className="sidebar-logo" src="/brand/thuishub-icon-128.png" alt=""/><span>{bootstrap.settings.serverName}</span></button><nav>{([['home','home','Start'],['movies','movie','Films'],['series','series','Series'],['music','music','Muziek'],['photos','photos','Foto’s'],['live','live','Live TV'],['watchlist','watchlist','Mijn lijst'],...(bootstrap.user.role==='admin'?[['dashboard','settings','Dashboard']]:[]),['settings','settings','Instellingen']] as [View,any,string][]).map(([id,icon,label])=><button key={id} className={view===id?'active':''} onClick={()=>nav(id)}><Icon name={icon}/><span>{label}</span></button>)}</nav><div className="sidebar-user"><div className="avatar">{bootstrap.user.username.slice(0,1).toUpperCase()}</div><span><strong>{bootstrap.user.username}</strong><small>{bootstrap.user.role==='admin'?'Beheerder':'Gebruiker'}</small></span></div></aside>
     <main className="content">
       {!['settings','dashboard'].includes(view)&&<header className="topbar"><button className="mobile-brand" onClick={()=>nav('home')}><img className="sidebar-logo" src="/brand/thuishub-icon-128.png" alt="ThuisHub"/></button><div className="search"><Icon name="search"/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Zoek in je bibliotheek…"/></div>{bootstrap.scan.running&&<div className="scan-pill"><span className="spinner tiny"/>Scannen {bootstrap.scan.scanned}/{bootstrap.scan.total||'?'}</div>}</header>}
       {view==='home'&&<>
@@ -340,11 +306,11 @@ export default function App() {
       {view==='photos'&&<PhotosPage photos={photos.filter(x=>x.title.toLowerCase().includes(query))}/>} 
       {view==='live'&&<LiveTvPage/>}
       {view==='watchlist'&&<LibraryPage eyebrow="PERSOONLIJK" title="Mijn lijst" count={watchlistItems.length}>{watchlistItems.map(item=><MediaCard key={item.id} item={item} subtitle={item.kind==='episode'?`S${item.season} · A${item.episode}`:undefined} onClick={()=>openItem(item)}/>)}</LibraryPage>}
-      {view==='dashboard'&&auth.user.role==='admin'&&<ServerDashboard settings={bootstrap.settings} onSettingsChanged={loadBootstrap}/>} 
+      {view==='dashboard'&&bootstrap.user.role==='admin'&&<ServerDashboard settings={bootstrap.settings} onSettingsChanged={loadBootstrap}/>}
       {view==='settings'&&<SettingsPanel bootstrap={bootstrap} reload={loadBootstrap} refreshLibrary={loadLibrary}/>} 
     </main>
-    <nav className="bottom-nav">{([['home','home','Start'],['movies','movie','Films'],['series','series','Series'],['music','music','Muziek'],['photos','photos','Foto’s'],['live','live','Live'],['watchlist','watchlist','Mijn lijst'],...(auth.user.role==='admin'?[['dashboard','settings','Dashboard']]:[]),['settings','settings','Instellingen']] as [View,any,string][]).map(([id,icon,label])=><button key={id} className={view===id?'active':''} onClick={()=>nav(id)}><Icon name={icon}/><span>{label}</span></button>)}</nav>
-    {selected&&<Detail item={selected.item} episodes={selected.episodes} playlists={playlists} settings={bootstrap.settings} isAdmin={auth.user.role==='admin'} onClose={()=>setSelected(null)} onPlay={item=>{setSelected(null);setPlaying(item);}} onState={state=>updateMediaState(selected.item.id,state)} onEdit={()=>setEditor(selected.item)} onNotice={message=>{setNotice(message);setTimeout(()=>setNotice(''),3500)}}/>}
+    <nav className="bottom-nav">{([['home','home','Start'],['movies','movie','Films'],['series','series','Series'],['music','music','Muziek'],['photos','photos','Foto’s'],['live','live','Live'],['watchlist','watchlist','Mijn lijst'],...(bootstrap.user.role==='admin'?[['dashboard','settings','Dashboard']]:[]),['settings','settings','Instellingen']] as [View,any,string][]).map(([id,icon,label])=><button key={id} className={view===id?'active':''} onClick={()=>nav(id)}><Icon name={icon}/><span>{label}</span></button>)}</nav>
+    {selected&&<Detail item={selected.item} episodes={selected.episodes} playlists={playlists} settings={bootstrap.settings} isAdmin={bootstrap.user.role==='admin'} onClose={()=>setSelected(null)} onPlay={item=>{setSelected(null);setPlaying(item);}} onState={state=>updateMediaState(selected.item.id,state)} onEdit={()=>setEditor(selected.item)} onNotice={message=>{setNotice(message);setTimeout(()=>setNotice(''),3500)}}/>}
     {playing&&<Player item={playing} settings={bootstrap.settings} onClose={()=>setPlaying(null)} onProgress={updateProgress} onFinished={()=>{if(bootstrap.settings.autoplay&&nextItem)setPlaying(nextItem);else setPlaying(null);}}/>} 
     {editor&&<MetadataEditor item={editor} onClose={()=>setEditor(null)} onSaved={saveEdited}/>} 
     {notice&&<div className="toast">{notice}</div>}

@@ -1,6 +1,12 @@
-# ThuisHub 1.2.0
+# ThuisHub 1.2.1
 
 ThuisHub is een lokale Windows-mediaserver voor eigen films, series, muziek, foto's en Live TV/DVR. De beheerinterface blijft op `http://127.0.0.1:8787`; de Windows-app en browser gebruiken dezelfde lokale gegevens in `%APPDATA%\ThuisHub\data`.
+
+## Nieuw in 1.2.1
+
+- De app en browser openen direct zonder inlog- of installatiescherm.
+- Een nieuwe installatie maakt automatisch één lokaal beheerdersprofiel aan; bestaande bibliotheken behouden hun beheerder.
+- Bij een onbereikbare server verschijnt alleen een verbindingsmelding met **Opnieuw proberen**.
 
 ## Nieuw in 1.2.0
 
@@ -16,7 +22,7 @@ ThuisHub is een lokale Windows-mediaserver voor eigen films, series, muziek, fot
 ## Starten
 
 - Geïnstalleerd: open **ThuisHub** via Start of de bureaubladsnelkoppeling.
-- Portable: open `release\ThuisHub-Portable-1.2.0.exe`.
+- Portable: open `release\ThuisHub-Portable-1.2.1.exe`.
 - Browser/server: dubbelklik `ThuisHub starten.cmd`.
 - Volledig afsluiten: kies **ThuisHub afsluiten** in het systeemvak.
 
@@ -50,7 +56,7 @@ npm run dist:win
 Releasegegevens maakt u na de builds met:
 
 ```powershell
-.\scripts\generate-release-metadata.ps1 -Version 1.2.0
+.\scripts\generate-release-metadata.ps1 -Version 1.2.1
 .\scripts\scan-release-secrets.ps1 -IncludeReleaseArtifacts
 ```
 

@@ -1,4 +1,4 @@
-# ThuisHub functiepariteit 1.2.0
+# ThuisHub functiepariteit 1.2.1
 
 | Onderdeel | Status | Opmerking |
 |---|---|---|

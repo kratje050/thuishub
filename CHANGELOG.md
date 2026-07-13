@@ -1,5 +1,12 @@
 # Wijzigingen
 
+## 1.2.1 — 13 juli 2026
+
+- Het volledige inlog- en eerste-installatiescherm is uit de Windows-app, browser en PWA verwijderd.
+- ThuisHub gebruikt automatisch de bestaande beheerder of maakt bij een lege installatie één lokaal beheerdersprofiel aan.
+- De uitlogknop is verwijderd en verbindingsproblemen tonen voortaan een herhaalbare verbindingsmelding.
+- De PWA-cache is vernieuwd zodat telefoons niet op het oude inlogscherm blijven hangen.
+
 ## 1.2.0 — 13 juli 2026
 
 - Centrale capability-gestuurde Direct Play/Direct Stream/transcode-beslislaag met 35 playbacktests.

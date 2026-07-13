@@ -2,6 +2,8 @@
 
 ThuisHub is lokaal-eerst. De beheerinterface bindt aan `127.0.0.1:8787`. Optionele tv-streaming bindt uitsluitend aan één door de beheerder gekozen RFC1918-adres en biedt alleen health-, pairing-, device- en signed playbackroutes aan.
 
+De persoonlijke beheerinterface heeft bewust geen inlogscherm en gebruikt automatisch het lokale beheerdersprofiel. Iedereen die toegang heeft tot de Windows-sessie of tot de hoofdinterface via Tailscale Serve heeft daardoor ook beheerrechten. Deel de Tailscale-URL alleen binnen je eigen vertrouwde tailnet en gebruik nooit Tailscale Funnel of router-port-forwarding.
+
 ## Netwerkregels
 
 - Geen automatische routerpoorten, UPnP-portforwarding of Tailscale Funnel.
