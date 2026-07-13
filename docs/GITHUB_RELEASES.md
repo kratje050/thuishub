@@ -10,7 +10,7 @@ Een officiële release bevat exact:
 - `SHA256SUMS.txt`, `latest.json`, `RELEASE_NOTES.md`
 - optioneel `ThuisHub-Samsung-TV-<versie>.wgt`
 
-De updater selecteert nooit het eerste willekeurige EXE-bestand. Downloads gaan via een willekeurig `.part`-bestand naar `%LOCALAPPDATA%\ThuisHub\updates`, waarna grootte, SHA-256 en eventueel de GitHub digest worden vergeleken. Beschadigde bestanden worden verwijderd. Na **Installeren en herstarten** wordt de installer nogmaals gecontroleerd, sluit ThuisHub netjes af en opent de Windows-installer pas nadat het oude proces verdwenen is.
+De updater selecteert nooit het eerste willekeurige EXE-bestand. Downloads gaan via een willekeurig `.part`-bestand naar `%LOCALAPPDATA%\ThuisHub\updates`, waarna grootte, SHA-256 en eventueel de GitHub digest worden vergeleken. Beschadigde bestanden worden verwijderd. Na **Automatisch installeren** wordt de installer nogmaals gecontroleerd en sluit ThuisHub netjes af. De stille installer verwijdert de oude programmabestanden met `/KEEP_APP_DATA`, installeert de nieuwe versie en start die daarna automatisch.
 
 ## Eerste release voorbereiden
 

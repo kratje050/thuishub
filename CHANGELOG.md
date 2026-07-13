@@ -1,5 +1,10 @@
 # Wijzigingen
 
+## In ontwikkeling — nog niet gepubliceerd
+
+- Windows-updates vervangen de oude programmaversie voortaan volledig automatisch en starten daarna de nieuwe versie.
+- De stille upgrade gebruikt de bestaande veilige verwijderprocedure met behoud van bibliotheken, database, instellingen, voortgang en back-ups.
+
 ## 1.2.2 — 13 juli 2026
 
 - Het update-dashboard toont na een gecontroleerde download de knop **Installeren en herstarten**.

@@ -19,9 +19,16 @@ describe('Windows-distributie', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
     expect(packageJson.version).toBe('1.2.2');
     expect(packageJson.build.nsis.artifactName).toContain('ThuisHub-Setup');
+    expect(packageJson.build.nsis.deleteAppDataOnUninstall).toBe(false);
     expect(packageJson.build.portable.artifactName).toContain('ThuisHub-Portable');
     expect(packageJson.build.appId).toBe('nl.huiskamer.media');
-    expect(fs.readFileSync(path.resolve('build/installer.nsh'), 'utf8')).toContain('Huiskamer.lnk');
+    const installerInclude=fs.readFileSync(path.resolve('build/installer.nsh'),'utf8');
+    expect(installerInclude).toContain('Huiskamer.lnk');
+    expect(installerInclude).toContain('${ifNot} ${isUpdated}');
+    expect(installerInclude).toContain('/SD IDNO');
+    const upgradeTemplate=fs.readFileSync(path.resolve('node_modules/app-builder-lib/templates/nsis/include/installUtil.nsh'),'utf8');
+    expect(upgradeTemplate).toContain('Function uninstallOldVersion');
+    expect(upgradeTemplate).toContain('/S /KEEP_APP_DATA');
   });
 
   it('accepteert alleen de exacte gecontroleerde installer en verwijdert het overdrachtsbestand', () => {
@@ -41,5 +48,6 @@ describe('Windows-distributie', () => {
     const result=handoff.launchInstallerAfterExit('C:\\Updates\\ThuisHub-Setup-1.3.0.exe',4321,(command:string,args:string[],options:any)=>{call={command,args,options};return{unref:()=>{unref=true}}});
     expect(call.command).toBe('powershell.exe');expect(call.options).toMatchObject({detached:true,windowsHide:true});expect(unref).toBe(true);
     expect(result.script).toContain('Wait-Process -Id 4321');expect(result.script).toContain('ThuisHub-Setup-1.3.0.exe');
+    expect(result.script).toContain("-ArgumentList '/S','--force-run' -Wait -PassThru");
   });
 });

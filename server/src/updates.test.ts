@@ -100,6 +100,16 @@ describe('beveiligde update-download',()=>{
     expect(request).toMatchObject({version:'1.3.0',fileName:'ThuisHub-Setup-1.3.0.exe',bytes:bytes.length,sha256});
   });
 
+  it('vervangt via de losse browserserver de oude installatie stil en start de nieuwe versie',async()=>{
+    database.setSetting('lastUpdateResult',JSON.stringify({...manifest,available:true}));
+    await updates.downloadUpdate(manifest,async()=>new Response(bytes));
+    let call:any;let stopped=false;
+    const result=updates.requestUpdateInstall({desktop:false,shutdown:()=>{stopped=true},spawnProcess:(command,args,options)=>{call={command,args,options};return{unref(){}}}});
+    const encoded=call.args.at(-1);const script=Buffer.from(encoded,'base64').toString('utf16le');
+    expect(result).toMatchObject({accepted:true,mode:'browser',version:'1.3.0'});expect(stopped).toBe(true);
+    expect(script).toContain("-ArgumentList '/S','--force-run' -Wait -PassThru");
+  });
+
   it('controleert de installer opnieuw en weigert een wijziging na de download',async()=>{
     database.setSetting('lastUpdateResult',JSON.stringify({...manifest,available:true}));
     const result=await updates.downloadUpdate(manifest,async()=>new Response(bytes));

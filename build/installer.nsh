@@ -5,7 +5,9 @@
 !macroend
 
 !macro customUnInstall
-  MessageBox MB_YESNO|MB_ICONQUESTION "Wil je ook alle ThuisHub-gebruikersgegevens, instellingen en back-ups verwijderen? Kies Nee om je gegevens te behouden." IDNO keepUserData
-  RMDir /r "$APPDATA\ThuisHub"
-  keepUserData:
+  ${ifNot} ${isUpdated}
+    MessageBox MB_YESNO|MB_ICONQUESTION "Wil je ook alle ThuisHub-gebruikersgegevens, instellingen en back-ups verwijderen? Kies Nee om je gegevens te behouden." /SD IDNO IDNO keepUserData
+    RMDir /r "$APPDATA\ThuisHub"
+    keepUserData:
+  ${endIf}
 !macroend

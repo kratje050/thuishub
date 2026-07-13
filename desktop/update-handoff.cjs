@@ -34,7 +34,7 @@ function consumeInstallRequest(requestFile, updatesDir) {
 
 function launchInstallerAfterExit(installerPath, waitPid, spawnProcess = spawn) {
   const escaped = installerPath.replaceAll("'", "''");
-  const script = `$ErrorActionPreference = 'Stop'\r\nWait-Process -Id ${waitPid} -ErrorAction SilentlyContinue\r\nStart-Sleep -Milliseconds 500\r\nStart-Process -FilePath '${escaped}'\r\n`;
+  const script = `$ErrorActionPreference = 'Stop'\r\nWait-Process -Id ${waitPid} -ErrorAction SilentlyContinue\r\nStart-Sleep -Milliseconds 500\r\n$installer = Start-Process -FilePath '${escaped}' -ArgumentList '/S','--force-run' -Wait -PassThru\r\nif ($installer.ExitCode -ne 0) { exit $installer.ExitCode }\r\n`;
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   const helper = spawnProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded], { detached: true, stdio: 'ignore', windowsHide: true });
   helper.unref();

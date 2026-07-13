@@ -119,7 +119,7 @@ function verifiedDownloadedUpdate(){
 
 function launchInstallerAfterExit(installer:string,waitPid=process.pid,spawnProcess:SpawnLike=spawn as SpawnLike){
   const escaped=installer.replaceAll("'","''");
-  const script=`$ErrorActionPreference = 'Stop'\r\nWait-Process -Id ${waitPid} -ErrorAction SilentlyContinue\r\nStart-Sleep -Milliseconds 500\r\nStart-Process -FilePath '${escaped}'\r\n`;
+  const script=`$ErrorActionPreference = 'Stop'\r\nWait-Process -Id ${waitPid} -ErrorAction SilentlyContinue\r\nStart-Sleep -Milliseconds 500\r\n$installer = Start-Process -FilePath '${escaped}' -ArgumentList '/S','--force-run' -Wait -PassThru\r\nif ($installer.ExitCode -ne 0) { exit $installer.ExitCode }\r\n`;
   const encoded=Buffer.from(script,'utf16le').toString('base64');
   const helper=spawnProcess('powershell.exe',['-NoProfile','-NonInteractive','-WindowStyle','Hidden','-EncodedCommand',encoded],{detached:true,stdio:'ignore',windowsHide:true});helper.unref();
 }
@@ -132,12 +132,12 @@ export function requestUpdateInstall(options:{desktop?:boolean;spawnProcess?:Spa
     fs.mkdirSync(appPaths.updatesDir,{recursive:true});const temporary=`${installRequestFile}.${crypto.randomBytes(5).toString('hex')}.tmp`;
     fs.writeFileSync(temporary,JSON.stringify({...update,requestedAt:new Date().toISOString()}));fs.renameSync(temporary,installRequestFile);
     log('INFO','updater','Installatieverzoek veilig overgedragen aan de Windows-app.',{version:update.version,fileName:update.fileName});
-    return{accepted:true,mode:'desktop',version:update.version,message:'ThuisHub wordt afgesloten. Daarna opent de gecontroleerde installer automatisch.'};
+    return{accepted:true,mode:'desktop',version:update.version,message:'ThuisHub wordt afgesloten. De oude programmaversie wordt automatisch vervangen en de nieuwe versie start daarna.'};
   }
   launchInstallerAfterExit(update.file,process.pid,options.spawnProcess);
   (options.shutdown||(()=>{const timer=setTimeout(()=>process.kill(process.pid,'SIGTERM'),1200);timer.unref()}))();
   log('INFO','updater','Installer gepland na het afsluiten van de browser-server.',{version:update.version,fileName:update.fileName});
-  return{accepted:true,mode:'browser',version:update.version,message:'De server sluit af. Daarna opent de gecontroleerde installer automatisch.'};
+  return{accepted:true,mode:'browser',version:update.version,message:'De server sluit af. De oude programmaversie wordt automatisch vervangen en de nieuwe versie start daarna.'};
 }
 
 export const updateInternals={compareVersions,selectRelease,manifestFromRelease,exactAsset,headers,GITHUB_API,installRequestFile,verifiedDownloadedUpdate,launchInstallerAfterExit,setDownloadInProgress:(value:boolean)=>downloadInProgress=value};
