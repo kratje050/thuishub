@@ -1,5 +1,14 @@
 # Wijzigingen
 
+## 1.2.5 — 14 juli 2026
+
+- De Android-app opent voortaan op een bruikbaar Home-scherm in plaats van direct in een blokkerende automatische zoekweergave.
+- Automatisch zoeken en verbinden is een opgeslagen instelling die standaard uitstaat; handmatig zoeken en een lokaal serveradres blijven altijd beschikbaar.
+- Home, verbindingsinstellingen en app-updates blijven bereikbaar vóór, tijdens en na het koppelen.
+- De Android-app kan zonder gekoppelde ThuisHub-server rechtstreeks op GitHub Releases controleren op updates.
+- Android-updates worden alleen van de eigen ThuisHub-release gedownload, op bestandstype en grootte begrensd en vóór installatie met de gepubliceerde SHA-256 gecontroleerd.
+- Het volledige Home-, bibliotheek-, dashboard- en instellingenontwerp gebruikt de nieuwe donkere filmische ThuisHub-interface zonder Premium-kaart of verkooppromotie.
+
 ## 1.2.4 — 14 juli 2026
 
 - De Android-client is universeel gemaakt voor telefoon, tablet, Android TV en Google TV.

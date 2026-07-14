@@ -1,5 +1,7 @@
 $ErrorActionPreference = 'Stop'
-$project = (Resolve-Path (Join-Path $PSScriptRoot '..\apps\android-tv')).Path
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$project = (Resolve-Path (Join-Path $root 'apps\android-tv')).Path
+$version = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
 $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
 $studioJava = 'C:\Program Files\Android\Android Studio\jbr'
 if (-not (Test-Path $sdk)) { throw 'Android SDK ontbreekt. Installeer Android Studio met Android SDK Platform 35.' }
@@ -15,9 +17,9 @@ finally { Pop-Location }
 
 $source = Join-Path $project 'app\build\outputs\apk\debug\app-debug.apk'
 if (-not (Test-Path $source)) { throw 'Het gebouwde APK-bestand is niet gevonden.' }
-$release = (New-Item -ItemType Directory -Force (Join-Path $PSScriptRoot '..\release')).FullName
-$target = Join-Path $release 'ThuisHub-Android-1.2.4.apk'
-$legacyTarget = Join-Path $release 'ThuisHub-Android-TV-1.2.4.apk'
+$release = (New-Item -ItemType Directory -Force (Join-Path $root 'release')).FullName
+$target = Join-Path $release "ThuisHub-Android-$version.apk"
+$legacyTarget = Join-Path $release "ThuisHub-Android-TV-$version.apk"
 Copy-Item -LiteralPath $source -Destination $target -Force
 Copy-Item -LiteralPath $source -Destination $legacyTarget -Force
 Write-Host "Universele Android-APK gemaakt: $target" -ForegroundColor Green

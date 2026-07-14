@@ -1,6 +1,8 @@
 $ErrorActionPreference = 'Stop'
-$project = Join-Path $PSScriptRoot '..\apps\samsung-tizen'
-$output = Join-Path $PSScriptRoot '..\release\ThuisHub-Samsung-TV-1.2.4.wgt'
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$version = (Get-Content (Join-Path $root 'package.json') -Raw | ConvertFrom-Json).version
+$project = Join-Path $root 'apps\samsung-tizen'
+$output = Join-Path $root "release\ThuisHub-Samsung-TV-$version.wgt"
 $tizen = Get-Command tizen.bat -ErrorAction SilentlyContinue
 if (-not $tizen) { throw 'Tizen Studio CLI ontbreekt. Installeer Tizen Studio, TV Extensions en een Samsung-certificaatprofiel; de volledige broncode staat in apps\samsung-tizen.' }
 & $tizen.Source build-web -- $project

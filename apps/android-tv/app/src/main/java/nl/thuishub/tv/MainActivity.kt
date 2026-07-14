@@ -2,12 +2,16 @@ package nl.thuishub.tv
 
 import android.app.UiModeManager
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.media.MediaCodecList
+import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Bundle
+import android.os.Build
+import android.provider.Settings as AndroidSettings
 import android.view.Display
 import android.view.Gravity
 import android.view.View
@@ -23,6 +27,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -38,17 +43,23 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.URL
+import java.security.MessageDigest
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
     companion object {
         private const val SERVICE_TYPE = "_thuishub._tcp."
-        private const val APP_VERSION = "1.2.4"
+        private const val APP_VERSION = "1.2.5"
+        private const val UPDATE_MANIFEST_URL = "https://github.com/kratje050/thuishub/releases/latest/download/latest.json"
+        private const val MAX_MANIFEST_BYTES = 256 * 1024
+        private const val MAX_APK_BYTES = 200L * 1024 * 1024
     }
 
     private lateinit var root: FrameLayout
@@ -69,9 +80,14 @@ class MainActivity : ComponentActivity() {
     private var serverConfirmed = false
     private var connectionAttemptActive = false
     private var connectionJob: Job? = null
+    private var updateJob: Job? = null
     private var currentScreen = AppScreen.HOME
     private var lastConnectionStatus = ""
     private var lastPairingCode = ""
+    private var updateScreenStatus: TextView? = null
+    private var lastUpdateStatus = "Updates werken ook zonder gekoppelde ThuisHub-server."
+    private var availableUpdate: AndroidUpdate? = null
+    private var downloadedUpdateFile: File? = null
     private val resolving = mutableSetOf<String>()
     private val executedCommandIds = mutableSetOf<Long>()
     private val preferences by lazy { getSharedPreferences("thuishub", MODE_PRIVATE) }
@@ -142,6 +158,7 @@ class MainActivity : ComponentActivity() {
     private fun showHome() {
         currentScreen = AppScreen.HOME
         pairingCode = null
+        updateScreenStatus = null
         val column = newScreenColumn()
         addNavigation(column, "ThuisHub", includeHome = false)
         column.addView(TextView(this).apply {
@@ -181,6 +198,11 @@ class MainActivity : ComponentActivity() {
             isAllCaps = false
             setOnClickListener { showSettings() }
         }, LinearLayout.LayoutParams(-1, -2))
+        column.addView(Button(this).apply {
+            text = "App-updates"
+            isAllCaps = false
+            setOnClickListener { showUpdates() }
+        }, LinearLayout.LayoutParams(-1, -2))
         column.addView(TextView(this).apply {
             text = if (automaticConnectionEnabled) "Automatisch zoeken en verbinden: aan"
             else "Automatisch zoeken en verbinden: uit"
@@ -195,6 +217,7 @@ class MainActivity : ComponentActivity() {
     private fun showSettings() {
         currentScreen = AppScreen.SETTINGS
         pairingCode = null
+        updateScreenStatus = null
         val column = newScreenColumn()
         addNavigation(column, "Instellingen")
         column.addView(TextView(this).apply {
@@ -234,6 +257,11 @@ class MainActivity : ComponentActivity() {
             setPadding(0, dp(8), 0, dp(16))
         }
         column.addView(screenStatus, LinearLayout.LayoutParams(-1, -2))
+        column.addView(Button(this).apply {
+            text = "App-updates"
+            isAllCaps = false
+            setOnClickListener { showUpdates() }
+        }, LinearLayout.LayoutParams(-1, -2))
         column.addView(Button(this).apply {
             text = "Nu zoeken en koppelen"
             isAllCaps = false
@@ -275,8 +303,70 @@ class MainActivity : ComponentActivity() {
         renderColumn(column)
     }
 
+    private fun showUpdates() {
+        currentScreen = AppScreen.UPDATES
+        pairingCode = null
+        val column = newScreenColumn()
+        addNavigation(column, "App-updates")
+        column.addView(TextView(this).apply {
+            text = "ThuisHub bijwerken"
+            textSize = if (isTelevision) 32f else 27f
+            setTextColor(0xffffffff.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, dp(38), 0, dp(8))
+        }, LinearLayout.LayoutParams(-1, -2))
+        column.addView(TextView(this).apply {
+            text = "Huidige versie: $APP_VERSION"
+            textSize = 16f
+            setTextColor(0xffa9b7c0.toInt())
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(-1, -2))
+        updateScreenStatus = TextView(this).apply {
+            text = lastUpdateStatus
+            textSize = 16f
+            setTextColor(0xffb8c8c0.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, dp(12), 0, dp(22))
+        }
+        column.addView(updateScreenStatus, LinearLayout.LayoutParams(-1, -2))
+        column.addView(Button(this).apply {
+            text = "Controleren op updates"
+            isAllCaps = false
+            isEnabled = updateJob?.isActive != true
+            setOnClickListener { checkForAndroidUpdate() }
+        }, LinearLayout.LayoutParams(-1, -2))
+        val update = availableUpdate
+        if (update != null && compareVersions(update.version, APP_VERSION) > 0) {
+            column.addView(TextView(this).apply {
+                text = "Nieuwe versie: ${update.version}"
+                textSize = 18f
+                setTextColor(0xffd9ff3f.toInt())
+                gravity = Gravity.CENTER
+                setPadding(0, dp(18), 0, dp(8))
+            }, LinearLayout.LayoutParams(-1, -2))
+            val downloaded = downloadedUpdateFile?.takeIf { it.isFile }
+            column.addView(Button(this).apply {
+                text = if (downloaded == null) "Downloaden en installeren" else "Installeren"
+                isAllCaps = false
+                isEnabled = updateJob?.isActive != true
+                setOnClickListener {
+                    if (downloaded == null) downloadAndroidUpdate(update) else launchApkInstaller(downloaded)
+                }
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
+        column.addView(TextView(this).apply {
+            text = "De update komt rechtstreeks van GitHub Releases en wordt vóór installatie met SHA-256 gecontroleerd. Koppelen met de pc is hiervoor niet nodig."
+            textSize = 13f
+            setTextColor(0xff80958c.toInt())
+            gravity = Gravity.CENTER
+            setPadding(0, dp(20), 0, 0)
+        }, LinearLayout.LayoutParams(-1, -2))
+        renderColumn(column)
+    }
+
     private fun showPairing() {
         currentScreen = AppScreen.CONNECTING
+        updateScreenStatus = null
         val column = newScreenColumn()
         addNavigation(column, "ThuisHub koppelen")
         val title = TextView(this).apply {
@@ -331,6 +421,11 @@ class MainActivity : ComponentActivity() {
         column.addView(manualAddress, LinearLayout.LayoutParams(-1, -2))
         column.addView(manualConnect, LinearLayout.LayoutParams(-1, -2))
         column.addView(Button(this).apply {
+            text = "App-updates"
+            isAllCaps = false
+            setOnClickListener { showUpdates() }
+        }, LinearLayout.LayoutParams(-1, -2))
+        column.addView(Button(this).apply {
             text = "Annuleren"
             isAllCaps = false
             setOnClickListener {
@@ -345,6 +440,193 @@ class MainActivity : ComponentActivity() {
     private fun updateStatus(message: String) {
         lastConnectionStatus = message
         runOnUiThread { screenStatus?.text = message }
+    }
+
+    private fun checkForAndroidUpdate() {
+        if (updateJob?.isActive == true) return
+        lastUpdateStatus = "De nieuwste GitHub-release controleren…"
+        updateScreenStatus?.text = lastUpdateStatus
+        updateJob = lifecycleScope.launch {
+            try {
+                val update = loadAndroidUpdateManifest()
+                availableUpdate = update
+                if (downloadedUpdateFile?.name != update.assetName) downloadedUpdateFile = null
+                lastUpdateStatus = if (compareVersions(update.version, APP_VERSION) > 0) {
+                    "Versie ${update.version} is beschikbaar."
+                } else {
+                    "Je gebruikt al de nieuwste versie."
+                }
+            } catch (error: Exception) {
+                lastUpdateStatus = error.message ?: "Updatecontrole is mislukt."
+            }
+            updateJob = null
+            if (currentScreen == AppScreen.UPDATES) showUpdates()
+        }
+    }
+
+    private suspend fun loadAndroidUpdateManifest(): AndroidUpdate = withContext(Dispatchers.IO) {
+        val manifest = JSONObject(readTrustedUpdateText(UPDATE_MANIFEST_URL))
+        val version = manifest.optString("version").trim()
+        val tag = manifest.optString("tag").trim()
+        val channel = manifest.optString("channel").trim()
+        if (manifest.optString("product") != "ThuisHub" || channel != "stable" || !Regex("^\\d+\\.\\d+\\.\\d+$").matches(version)) {
+            throw IllegalStateException("De GitHub-release bevat geen geldige stabiele ThuisHub-versie.")
+        }
+        if (tag != "v$version") throw IllegalStateException("De versie en releasetag komen niet overeen.")
+        val android = manifest.optJSONObject("assets")?.optJSONObject("android")
+            ?: throw IllegalStateException("De Android-update ontbreekt in de release.")
+        val assetName = android.optString("name").trim()
+        val sha256 = android.optString("sha256").trim().lowercase()
+        if (assetName != "ThuisHub-Android-$version.apk" || !Regex("^[A-Fa-f0-9]{64}$").matches(sha256)) {
+            throw IllegalStateException("De Android-update bevat geen geldige bestandscontrole.")
+        }
+        AndroidUpdate(version, tag, assetName, sha256)
+    }
+
+    private fun readTrustedUpdateText(urlValue: String): String {
+        if (urlValue != UPDATE_MANIFEST_URL) throw IllegalStateException("Onbekende updatebron geweigerd.")
+        val connection = openTrustedUpdateConnection(urlValue)
+        try {
+            val status = connection.responseCode
+            validateFinalUpdateUrl(connection.url)
+            if (status !in 200..299) throw IllegalStateException("GitHub gaf foutcode $status tijdens de updatecontrole.")
+            val declaredLength = connection.contentLengthLong
+            if (declaredLength > MAX_MANIFEST_BYTES) throw IllegalStateException("Het updatemanifest is onverwacht groot.")
+            connection.inputStream.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(8 * 1024)
+                var total = 0
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    if (total > MAX_MANIFEST_BYTES) throw IllegalStateException("Het updatemanifest is onverwacht groot.")
+                    output.write(buffer, 0, count)
+                }
+                return output.toString(Charsets.UTF_8.name())
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun downloadAndroidUpdate(update: AndroidUpdate) {
+        if (updateJob?.isActive == true) return
+        lastUpdateStatus = "ThuisHub ${update.version} downloaden en controleren…"
+        updateScreenStatus?.text = lastUpdateStatus
+        updateJob = lifecycleScope.launch {
+            try {
+                val file = withContext(Dispatchers.IO) { downloadAndVerifyApk(update) }
+                downloadedUpdateFile = file
+                lastUpdateStatus = "Download voltooid en SHA-256 gecontroleerd."
+                updateJob = null
+                if (currentScreen == AppScreen.UPDATES) {
+                    showUpdates()
+                    launchApkInstaller(file)
+                } else {
+                    showToast("Update gedownload en gecontroleerd. Open App-updates om te installeren.")
+                }
+            } catch (error: Exception) {
+                lastUpdateStatus = error.message ?: "Downloaden van de update is mislukt."
+                updateJob = null
+                if (currentScreen == AppScreen.UPDATES) showUpdates()
+            }
+        }
+    }
+
+    private fun downloadAndVerifyApk(update: AndroidUpdate): File {
+        if (!Regex("^ThuisHub-Android-\\d+\\.\\d+\\.\\d+\\.apk$").matches(update.assetName)) {
+            throw IllegalStateException("Ongeldige Android-update geweigerd.")
+        }
+        val url = "https://github.com/kratje050/thuishub/releases/download/${update.tag}/${update.assetName}"
+        val connection = openTrustedUpdateConnection(url)
+        val updateDirectory = File(cacheDir, "updates").apply { mkdirs() }
+        val temporary = File(updateDirectory, "${update.assetName}.part")
+        val target = File(updateDirectory, update.assetName)
+        temporary.delete()
+        try {
+            val status = connection.responseCode
+            validateFinalUpdateUrl(connection.url)
+            if (status !in 200..299) throw IllegalStateException("GitHub gaf foutcode $status tijdens het downloaden.")
+            val declaredLength = connection.contentLengthLong
+            if (declaredLength > MAX_APK_BYTES) throw IllegalStateException("De Android-update is onverwacht groot.")
+            val digest = MessageDigest.getInstance("SHA-256")
+            var total = 0L
+            connection.inputStream.use { input ->
+                temporary.outputStream().buffered().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        if (total > MAX_APK_BYTES) throw IllegalStateException("De Android-update is onverwacht groot.")
+                        digest.update(buffer, 0, count)
+                        output.write(buffer, 0, count)
+                    }
+                }
+            }
+            val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
+            if (actualHash != update.sha256) throw IllegalStateException("De SHA-256-controle van de Android-update is mislukt.")
+            target.delete()
+            if (!temporary.renameTo(target)) throw IllegalStateException("De gecontroleerde update kon niet worden opgeslagen.")
+            return target
+        } finally {
+            connection.disconnect()
+            if (temporary.exists()) temporary.delete()
+        }
+    }
+
+    private fun openTrustedUpdateConnection(urlValue: String): HttpURLConnection {
+        val parsed = URL(urlValue)
+        if (parsed.protocol != "https" || parsed.host != "github.com" || parsed.userInfo != null) {
+            throw IllegalStateException("Onveilige updateverbinding geweigerd.")
+        }
+        return (parsed.openConnection() as HttpURLConnection).apply {
+            instanceFollowRedirects = true
+            connectTimeout = 12_000
+            readTimeout = 60_000
+            setRequestProperty("Accept", "application/octet-stream, application/json")
+            setRequestProperty("User-Agent", "ThuisHub-Android/$APP_VERSION")
+        }
+    }
+
+    private fun validateFinalUpdateUrl(url: URL) {
+        val trustedHosts = setOf("github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com")
+        if (url.protocol != "https" || url.host !in trustedHosts || url.userInfo != null) {
+            throw IllegalStateException("GitHub stuurde de update naar een onbekende locatie.")
+        }
+    }
+
+    private fun launchApkInstaller(file: File) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+                lastUpdateStatus = "Geef ThuisHub toestemming om deze gecontroleerde update te installeren en kies daarna opnieuw Installeren."
+                showUpdates()
+                startActivity(Intent(AndroidSettings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                return
+            }
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val installer = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            lastUpdateStatus = "Android-installatie geopend. Bevestig de update op je apparaat."
+            updateScreenStatus?.text = lastUpdateStatus
+            startActivity(installer)
+        } catch (error: Exception) {
+            lastUpdateStatus = error.message ?: "De Android-installatie kon niet worden geopend."
+            showUpdates()
+        }
+    }
+
+    private fun compareVersions(left: String, right: String): Int {
+        val leftParts = left.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+        val rightParts = right.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+        for (index in 0 until maxOf(leftParts.size, rightParts.size)) {
+            val difference = (leftParts.getOrNull(index) ?: 0).compareTo(rightParts.getOrNull(index) ?: 0)
+            if (difference != 0) return difference
+        }
+        return 0
     }
 
     private fun startConnection(showProgressScreen: Boolean) {
@@ -584,6 +866,7 @@ class MainActivity : ComponentActivity() {
     private fun showLibrary() {
         if (token.isBlank()) { showPairing(); beginPairing(); return }
         currentScreen = AppScreen.LIBRARY
+        updateScreenStatus = null
         root.removeAllViews()
         screenStatus = null
         pairingCode = null
@@ -618,6 +901,11 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { showSettings() }
         })
         content.addView(header, LinearLayout.LayoutParams(-1, -2))
+        content.addView(Button(this).apply {
+            text = "App-updates"
+            isAllCaps = false
+            setOnClickListener { showUpdates() }
+        }, LinearLayout.LayoutParams(-1, -2))
         val libraryStatus = TextView(this).apply {
             text = "Bibliotheek laden…"
             textSize = 16f
@@ -953,6 +1241,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         connectionJob?.cancel()
+        updateJob?.cancel()
         pairingJob?.cancel()
         commandJob?.cancel()
         releasePlayback()
@@ -965,6 +1254,7 @@ class MainActivity : ComponentActivity() {
         when {
             player != null -> stopPlayback(showLibraryAfter = true)
             currentScreen == AppScreen.SETTINGS -> showHome()
+            currentScreen == AppScreen.UPDATES -> showHome()
             currentScreen == AppScreen.CONNECTING -> {
                 stopConnectionAttempt()
                 lastConnectionStatus = "Koppelen geannuleerd."
@@ -975,6 +1265,8 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class AppScreen { HOME, SETTINGS, CONNECTING, LIBRARY, PLAYER }
+private enum class AppScreen { HOME, SETTINGS, UPDATES, CONNECTING, LIBRARY, PLAYER }
+
+private data class AndroidUpdate(val version: String, val tag: String, val assetName: String, val sha256: String)
 
 private class HttpFailure(val status: Int, message: String) : IllegalStateException(message)

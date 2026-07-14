@@ -59,7 +59,16 @@ try {
   }
   if ($IncludeReleaseArtifacts -and (Test-Path 'release')) {
     $privateLiterals = @('.ts.net','C:\Users\')
-    $binaryAssets = Get-ChildItem -LiteralPath 'release' -File | Where-Object { $_.Extension -in '.exe','.apk','.wgt' }
+    $manifestPath = Join-Path 'release' 'latest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'release\latest.json ontbreekt; actuele release-assets kunnen niet veilig worden geselecteerd.' }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $assetNames = @($manifest.assets.PSObject.Properties.Value | ForEach-Object { $_.name })
+    $binaryAssets = foreach ($name in $assetNames) {
+      if (-not $name -or $name -ne [System.IO.Path]::GetFileName($name)) { throw 'latest.json bevat een onveilige assetnaam.' }
+      $assetPath = Join-Path 'release' $name
+      if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) { throw "Release-asset ontbreekt tijdens privacycontrole: $name" }
+      Get-Item -LiteralPath $assetPath
+    }
     foreach ($asset in $binaryAssets) {
       $matches = Find-PrivateLiteralInBinary -Path $asset.FullName -Needles $privateLiterals
       if ($matches) { throw "Release-asset $($asset.Name) bevat een privéhostname of lokaal gebruikerspad." }

@@ -1,10 +1,18 @@
-# ThuisHub 1.2.4
+# ThuisHub 1.2.5
 
 ThuisHub is een lokale Windows-mediaserver voor eigen films, series, muziek, foto's en Live TV/DVR. De beheerinterface blijft op `http://127.0.0.1:8787`; de Windows-app en browser gebruiken dezelfde lokale gegevens in `%APPDATA%\ThuisHub\data`.
 
 ## Metadata
 
 De ontwikkelversie gebruikt een modulaire metadata-laag: TVmaze voor series, optioneel OMDb voor films, lokale Kodi-NFO-bestanden, ingebedde bestandstags en een handmatige editor met veldlocks en herstelhistorie. API-keys blijven lokaal; externe afbeeldingen worden gecontroleerd en gecachet voordat de browser ze toont. Zie [Metadata en providers](docs/METADATA_PROVIDERS.md).
+
+## Nieuw in 1.2.5
+
+- De desktop- en browserinterface heeft een nieuw donker, filmisch ontwerp met vaste navigatie, zoekbalk, echte bibliotheekrijen en live systeemstatus, zonder Premium-kaart of verkooppromotie.
+- De Android-app opent altijd op Home en blokkeert de navigatie niet meer met automatische serverdetectie.
+- Onder **Verbindingsinstellingen** kan automatisch zoeken en verbinden aan of uit worden gezet; standaard staat dit uit.
+- **App-updates** werkt ook zonder serverkoppeling en controleert de officiële GitHub-release rechtstreeks. De APK wordt vóór installatie met SHA-256 geverifieerd.
+- Home, Instellingen, handmatig koppelen en updates blijven ook tijdens een lopende koppeling bereikbaar.
 
 ## Nieuw in 1.2.4
 
@@ -51,7 +59,7 @@ De softwarelogica en builds worden geautomatiseerd gecontroleerd, maar er is voo
 ## Starten
 
 - Geïnstalleerd: open **ThuisHub** via Start of de bureaubladsnelkoppeling.
-- Portable: open `release\ThuisHub-Portable-1.2.4.exe`.
+- Portable: open `release\ThuisHub-Portable-1.2.5.exe`.
 - Browser/server: dubbelklik `ThuisHub starten.cmd`.
 - Volledig afsluiten: kies **ThuisHub afsluiten** in het systeemvak.
 
@@ -88,7 +96,7 @@ npm run dist:win
 Releasegegevens maakt u na de builds met:
 
 ```powershell
-.\scripts\generate-release-metadata.ps1 -Version 1.2.4
+.\scripts\generate-release-metadata.ps1 -Version 1.2.5
 .\scripts\scan-release-secrets.ps1 -IncludeReleaseArtifacts
 ```
 
