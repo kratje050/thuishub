@@ -132,7 +132,7 @@ export function downloadedUpdateStatus(){
   const target=expectedName?path.join(appPaths.updatesDir,expectedName):'';
   const exists=Boolean(target&&fs.existsSync(target));
   const bytes=exists?fs.statSync(target).size:0;
-  const ready=Boolean(trusted.available&&validVersion(String(trusted.version||''))&&downloaded.version===trusted.version&&downloaded.fileName===expectedName&&downloaded.sha256===trusted.sha256&&/^[a-f0-9]{64}$/i.test(String(downloaded.sha256||''))&&bytes===downloaded.bytes&&(!trusted.size||bytes===trusted.size));
+  const ready=Boolean(trusted.available&&validVersion(String(trusted.version||''))&&compareVersions(String(trusted.version),APP_VERSION)>0&&downloaded.version===trusted.version&&downloaded.fileName===expectedName&&downloaded.sha256===trusted.sha256&&/^[a-f0-9]{64}$/i.test(String(downloaded.sha256||''))&&bytes===downloaded.bytes&&(!trusted.size||bytes===trusted.size));
   return{ready,version:ready?downloaded.version:undefined,fileName:ready?downloaded.fileName:undefined,bytes:ready?bytes:undefined,downloadedAt:ready?downloaded.downloadedAt:undefined,sha256Verified:ready};
 }
 

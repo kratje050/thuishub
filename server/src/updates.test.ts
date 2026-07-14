@@ -112,6 +112,13 @@ describe('beveiligde update-download',()=>{
     expect(request).toMatchObject({version:'1.3.0',fileName:'ThuisHub-Setup-1.3.0.exe',bytes:bytes.length,sha256});
   });
 
+  it('biedt een installer van de reeds actieve versie niet opnieuw aan bij opstarten',async()=>{
+    const current={...manifest,version:'1.2.14',assetName:'ThuisHub-Setup-1.2.14.exe',downloadUrl:'https://github.com/kratje050/thuishub/releases/download/v1.2.14/ThuisHub-Setup-1.2.14.exe'};
+    database.setSetting('lastUpdateResult',JSON.stringify({...current,available:true}));
+    await updates.downloadUpdate(current,async()=>new Response(bytes));
+    expect(updates.downloadedUpdateStatus()).toMatchObject({ready:false,sha256Verified:false});
+  });
+
   it('vervangt via de losse browserserver de oude installatie stil en start de nieuwe versie',async()=>{
     database.setSetting('lastUpdateResult',JSON.stringify({...manifest,available:true}));
     await updates.downloadUpdate(manifest,async()=>new Response(bytes));

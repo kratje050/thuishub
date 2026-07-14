@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { ApiError, api, patch, post, put, type Bootstrap, type MediaItem, type ScanState, type Settings, type Source, type User } from './api';
 import ServerDashboard from './ServerDashboard';
+import StartupUpdateDialog from './StartupUpdateDialog';
 import MetadataSettings from './MetadataSettings';
 import { CastButton } from './TvPlayback';
 import { localBrowserDeviceId, PlaybackDeviceLayer, PlaybackDeviceProvider } from './playback-devices';
@@ -461,6 +462,7 @@ export default function App() {
       <Toast message={notice}/>
     )}
     {audioTrack&&<AudioPlayer track={audioTrack} onClose={()=>setAudioTrack(null)} onEnded={()=>{const index=music.findIndex(x=>x.id===audioTrack.id);setAudioTrack(music[index+1]||null)}}/>}
+    <StartupUpdateDialog enabled={bootstrap.user.role==='admin'&&bootstrap.settings.automaticUpdateCheck}/>
     <PlaybackDeviceLayer/>
   </PlaybackDeviceProvider>;
 }
