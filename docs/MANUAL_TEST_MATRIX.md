@@ -1,4 +1,4 @@
-# Handmatige testmatrix 1.2.15
+# Handmatige testmatrix 1.2.16
 
 Geautomatiseerde tests kunnen protocolparsing, API-contracten, sessielogica en netwerkgrenzen bewijzen, maar niet de fysieke tv-, HDMI-, display-, audio- en firmware-uitvoer. De atomaire overdrachtslogica is automatisch getest; de volledige React-apparaatkiezer/spelerinteractie en browserspecifieke Google Cast SDK-flow hebben geen volledige componentautomatisering en blijven daarom handmatige UI- en hardwaretests. Er is nog geen volledige test op echte Chromecast-, Google TV-, Android TV-, Android-telefoon-, Samsung Tizen- of DLNA-hardware uitgevoerd.
 

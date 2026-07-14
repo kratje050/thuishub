@@ -17,9 +17,10 @@ describe('Windows-distributie', () => {
 
   it('configureert portable, installer en veilige upgrade', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
-    expect(packageJson.version).toBe('1.2.15');
+    expect(packageJson.version).toBe('1.2.16');
     expect(packageJson.build.nsis.artifactName).toContain('ThuisHub-Setup');
     expect(packageJson.build.nsis.deleteAppDataOnUninstall).toBe(false);
+    expect(packageJson.build.nsis.useZip).toBe(true);
     expect(packageJson.build.portable.artifactName).toContain('ThuisHub-Portable');
     expect(packageJson.build.appId).toBe('nl.huiskamer.media');
     const installerInclude=fs.readFileSync(path.resolve('build/installer.nsh'),'utf8');
@@ -36,6 +37,8 @@ describe('Windows-distributie', () => {
     expect(desktopEntry).toContain("process.argv.includes('--updated')");
     expect(desktopEntry).toContain('revealWindowAfterStart');
     expect(desktopEntry).toContain('mainWindow.setAlwaysOnTop(true)');
+    expect(desktopEntry).toContain("mainWindow.loadFile(path.join(__dirname, 'startup.html')");
+    expect(desktopEntry.indexOf('createWindow();')).toBeLessThan(desktopEntry.indexOf('await ensureServer();'));
   });
 
   it('accepteert alleen de exacte gecontroleerde installer en verwijdert het overdrachtsbestand', () => {
@@ -62,6 +65,8 @@ describe('Windows-distributie', () => {
       expect(result.script).toContain("Get-Process -Name 'ThuisHub'");
       expect(result.script).toContain("-ArgumentList '/S','--force-run' -PassThru -Wait");
       expect(result.script).toContain("Start-Process -FilePath $installedExecutable");
+      expect(result.script).toContain('$installReadyDeadline');
+      expect(result.script).not.toContain('Start-Sleep -Seconds 3');
       expect(result.script).toContain('install-helper.log');expect(result.script).toContain('C:\\Programs\\ThuisHub\\ThuisHub.exe');
       expect(fs.existsSync(result.helperFile)).toBe(true);
     }finally{fs.rmSync(root,{recursive:true,force:true})}

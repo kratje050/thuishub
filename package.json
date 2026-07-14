@@ -1,6 +1,6 @@
 {
   "name": "thuishub-media",
-  "version": "1.2.15",
+  "version": "1.2.16",
   "private": true,
   "description": "ThuisHub: je veilige lokale mediaserver voor Windows en browser",
   "main": "desktop/main.cjs",
@@ -107,7 +107,8 @@
       "shortcutName": "ThuisHub",
       "artifactName": "ThuisHub-Setup-${version}.${ext}",
       "include": "build/installer.nsh",
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "useZip": true
     },
     "portable": {
       "artifactName": "ThuisHub-Portable-${version}.${ext}"

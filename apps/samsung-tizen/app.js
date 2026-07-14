@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '1.2.15';
+  var APP_VERSION = '1.2.16';
   var SERVICE_TYPE = '_thuishub._tcp';
   var root = document.getElementById('app');
   var prefs = { server: localStorage.server || '', token: localStorage.deviceToken || '' };

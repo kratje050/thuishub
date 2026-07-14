@@ -1,5 +1,12 @@
 # Wijzigingen
 
+## 1.2.16 — 14 juli 2026
+
+- ThuisHub toont direct een licht opstartvenster terwijl de lokale server op de achtergrond gereedkomt.
+- Vaste wachttijden voor het starten van de update-installer en de vernieuwde app zijn verwijderd.
+- De Windows-installer gebruikt snellere ZIP-uitpakking, zonder een groter installatiebestand te veroorzaken.
+- Opstarttijden worden vastgelegd in het applicatielogboek voor gerichte controle.
+
 ## 1.2.15 — 14 juli 2026
 
 - Hervatten en HLS-transcoding beginnen direct op de gevraagde positie en wachten alleen op het eerste bruikbare segment.

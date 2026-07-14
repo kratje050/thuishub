@@ -13,6 +13,7 @@ const HEALTH_URL = 'http://127.0.0.1:8787/api/health';
 const APP_ID = 'nl.thuishub.media';
 const APP_NAME = 'ThuisHub';
 const launchedAfterUpdate = process.argv.includes('--updated');
+const desktopStartedAt = Date.now();
 
 let mainWindow;
 let tray;
@@ -139,7 +140,7 @@ function watchForUpdateInstall() {
       log(`Installatieverzoek geweigerd: ${error?.stack || error}`);
       dialog.showErrorBox('Update kon niet worden gestart', error instanceof Error ? error.message : String(error));
     }
-  }, 750);
+  }, 200);
   updateRequestTimer.unref?.();
 }
 
@@ -161,6 +162,7 @@ function showWindow() {
 
 function revealWindowAfterStart() {
   showWindow();
+  log(`Opstartvenster zichtbaar na ${Date.now() - desktopStartedAt} ms`);
   if (!launchedAfterUpdate || !mainWindow || mainWindow.isDestroyed()) return;
   // Installers can restart an app behind the previous window. Briefly raising
   // the updated window makes the successful restart unambiguous to the user.
@@ -198,7 +200,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', revealWindowAfterStart);
   const revealFallback = setTimeout(() => {
     if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) revealWindowAfterStart();
-  }, 5000);
+  }, 1500);
   revealFallback.unref?.();
   mainWindow.on('close', (event) => {
     if (!quitting) {
@@ -217,7 +219,20 @@ function createWindow() {
       shell.openExternal(url);
     }
   });
-  mainWindow.loadURL(APP_URL);
+  mainWindow.loadFile(path.join(__dirname, 'startup.html'), {
+    query: {
+      version: app.getVersion(),
+      updated: launchedAfterUpdate ? '1' : '0',
+    },
+  });
+}
+
+async function loadApplication() {
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  log('Webinterface laden');
+  await mainWindow.loadURL(APP_URL);
+  showWindow();
+  log(`Webinterface is zichtbaar na ${Date.now() - desktopStartedAt} ms`);
 }
 
 function createTray() {
@@ -249,10 +264,11 @@ if (hasLock) {
   app.whenReady().then(async () => {
     log('Electron is gereed');
     Menu.setApplicationMenu(null);
+    createWindow();
     try {
       await ensureServer();
-      log('Server is gereed; venster maken');
-      createWindow();
+      log('Server is gereed; webinterface openen');
+      await loadApplication();
       createTray();
       watchForUpdateInstall();
     } catch (error) {
