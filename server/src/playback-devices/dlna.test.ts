@@ -296,9 +296,11 @@ describe('discoverydiagnostiek en scripts', () => {
     expect(configure).toContain('-Profile Private');
     expect(configure).toMatch(/Protocol = 'UDP'; LocalPort = 1900/);
     expect(configure).toMatch(/Protocol = 'UDP'; LocalPort = 5353/);
+    expect(configure).toMatch(/Protocol = 'UDP'; LocalPort = 8789/);
     expect(configure).not.toMatch(/-Profile\s+(?:Public|Any)/i);
     expect(configure).not.toMatch(/-RemoteAddress\s+(?:Any|\*)/i);
     expect(diagnose).not.toMatch(/(?:New|Set|Remove)-NetFirewallRule/i);
+    expect(diagnose).toMatch(/Discovery \(Mobile\).*'8789'/);
     expect(diagnose).not.toMatch(/(?:portforward|funnel)\s+(?:enable|on)/i);
   });
 });

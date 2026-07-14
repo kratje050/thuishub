@@ -13,7 +13,8 @@ $legacyRuleName = 'ThuisHub Private LAN Streaming'
 $rules = @(
     @{ Name = 'ThuisHub Private LAN Streaming (TCP)'; Protocol = 'TCP'; LocalPort = $Port },
     @{ Name = 'ThuisHub Private LAN Discovery (SSDP)'; Protocol = 'UDP'; LocalPort = 1900 },
-    @{ Name = 'ThuisHub Private LAN Discovery (mDNS)'; Protocol = 'UDP'; LocalPort = 5353 }
+    @{ Name = 'ThuisHub Private LAN Discovery (mDNS)'; Protocol = 'UDP'; LocalPort = 5353 },
+    @{ Name = 'ThuisHub Private LAN Discovery (Mobile)'; Protocol = 'UDP'; LocalPort = 8789 }
 )
 
 function Test-PrivateIpv4([string]$Value) {
@@ -67,5 +68,5 @@ foreach ($rule in $rules) {
         -Profile Private | Out-Null
 }
 
-Write-Host "ThuisHub is uitsluitend vrijgegeven op $Address voor TCP $Port, SSDP UDP 1900 en mDNS UDP 5353." -ForegroundColor Green
+Write-Host "ThuisHub is uitsluitend vrijgegeven op $Address voor TCP $Port en lokale detectie via UDP 1900, 5353 en 8789." -ForegroundColor Green
 Write-Host 'De regels gelden alleen voor Windows-profiel Privé en RemoteAddress LocalSubnet. Er zijn geen router- of openbare regels gemaakt.' -ForegroundColor Green

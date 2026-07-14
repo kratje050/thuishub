@@ -123,7 +123,7 @@ foreach ($rule in @(Get-NetFirewallRule -Group $ruleGroup -ErrorAction SilentlyC
     $portFilter = $rule | Get-NetFirewallPortFilter
     $addressFilter = $rule | Get-NetFirewallAddressFilter
     $expectedProtocol = if ($rule.DisplayName -eq 'ThuisHub Private LAN Streaming (TCP)') { 'TCP' } else { 'UDP' }
-    $expectedPort = if ($rule.DisplayName -eq 'ThuisHub Private LAN Streaming (TCP)') { [string]$Port } elseif ($rule.DisplayName -eq 'ThuisHub Private LAN Discovery (SSDP)') { '1900' } elseif ($rule.DisplayName -eq 'ThuisHub Private LAN Discovery (mDNS)') { '5353' } else { '' }
+    $expectedPort = if ($rule.DisplayName -eq 'ThuisHub Private LAN Streaming (TCP)') { [string]$Port } elseif ($rule.DisplayName -eq 'ThuisHub Private LAN Discovery (SSDP)') { '1900' } elseif ($rule.DisplayName -eq 'ThuisHub Private LAN Discovery (mDNS)') { '5353' } elseif ($rule.DisplayName -eq 'ThuisHub Private LAN Discovery (Mobile)') { '8789' } else { '' }
     $firewall += [pscustomobject]@{
         Name = $rule.DisplayName
         Enabled = [string]$rule.Enabled

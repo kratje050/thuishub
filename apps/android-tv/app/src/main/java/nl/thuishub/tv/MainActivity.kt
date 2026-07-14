@@ -54,12 +54,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.security.MessageDigest
 import java.util.UUID
@@ -67,6 +70,8 @@ import java.util.UUID
 class MainActivity : ComponentActivity() {
     companion object {
         private const val SERVICE_TYPE = "_thuishub._tcp."
+        private const val DISCOVERY_PORT = 8789
+        private const val DISCOVERY_REQUEST = "THUISHUB_DISCOVER_V1"
         private const val APP_VERSION = "1.2.13"
         private const val UPDATE_MANIFEST_URL = "https://github.com/kratje050/thuishub/releases/latest/download/latest.json"
         private const val MAX_MANIFEST_BYTES = 256 * 1024
@@ -781,8 +786,15 @@ class MainActivity : ComponentActivity() {
                 updateStatus("ThuisHub wordt op je thuisnetwerk gezocht…")
             }
             startDiscovery()
-            delay(2_000)
+            delay(1_500)
             if (connectionAttemptActive && !serverConfirmed) {
+                updateStatus("ThuisHub wordt snel op je lokale netwerk gezocht…")
+                val advertised = discoverServerByBroadcast()
+                if (advertised != null && connectionAttemptActive && !serverConfirmed && verifyServer(advertised)) {
+                    selectServer(advertised)
+                    return@launch
+                }
+                if (!connectionAttemptActive || serverConfirmed) return@launch
                 updateStatus("ThuisHub wordt rechtstreeks op je lokale netwerk gezocht…")
                 val candidate = discoverServerOnLocalSubnet()
                 if (candidate != null && connectionAttemptActive && !serverConfirmed) selectServer(candidate)
@@ -840,7 +852,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                    if (connectionAttemptActive && serviceInfo.serviceType.equals(SERVICE_TYPE, ignoreCase = true)) resolveService(serviceInfo)
+                    if (connectionAttemptActive && isThuisHubServiceType(serviceInfo.serviceType)) resolveService(serviceInfo)
                 }
 
                 override fun onServiceLost(serviceInfo: NsdServiceInfo) = Unit
@@ -914,12 +926,74 @@ class MainActivity : ComponentActivity() {
         return "http://$host:$port"
     }
 
+    private fun isThuisHubServiceType(value: String): Boolean {
+        val normalized = value.trim().lowercase().trimEnd('.').removeSuffix(".local")
+        return normalized == "_thuishub._tcp"
+    }
+
     private suspend fun verifyServer(candidate: String): Boolean {
         if (!isSafeLocalServer(candidate)) return false
         return try {
             val health = JSONObject(rawRequest(candidate, "/api/health", "GET", null, false))
             health.optString("app") == "thuishub" && health.optString("status") == "ok"
         } catch (_: Exception) { false }
+    }
+
+    private suspend fun discoverServerByBroadcast(): String? = withContext(Dispatchers.IO) {
+        val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = connectivity.allNetworks.firstOrNull { candidate ->
+            connectivity.getNetworkCapabilities(candidate)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        } ?: connectivity.activeNetwork ?: return@withContext null
+        val link = connectivity.getLinkProperties(network)?.linkAddresses
+            ?.firstOrNull { it.address is Inet4Address && it.address.isSiteLocalAddress }
+            ?: return@withContext null
+        val address = link.address as Inet4Address
+        val prefixLength = link.prefixLength
+        if (prefixLength !in 1..30) return@withContext null
+        val localValue = address.address.fold(0) { value, part -> (value shl 8) or (part.toInt() and 0xff) }
+        val hostBits = 32 - prefixLength
+        val mask = -1 shl hostBits
+        val broadcastValue = localValue or mask.inv()
+        val broadcastBytes = intArrayOf(24, 16, 8, 0)
+            .map { shift -> ((broadcastValue ushr shift) and 0xff).toByte() }
+            .toByteArray()
+        val targets = listOfNotNull(
+            runCatching { InetAddress.getByAddress(broadcastBytes) }.getOrNull(),
+            runCatching { InetAddress.getByName("255.255.255.255") }.getOrNull(),
+        ).distinctBy { it.hostAddress }
+        val request = DISCOVERY_REQUEST.toByteArray(Charsets.UTF_8)
+        DatagramSocket().use { socket ->
+            runCatching { network.bindSocket(socket) }
+            socket.broadcast = true
+            targets.forEach { target ->
+                runCatching { socket.send(DatagramPacket(request, request.size, target, DISCOVERY_PORT)) }
+            }
+            val deadline = System.nanoTime() + 2_400_000_000L
+            while (System.nanoTime() < deadline) {
+                val remainingMs = ((deadline - System.nanoTime()) / 1_000_000L).coerceAtLeast(1L)
+                socket.soTimeout = minOf(700L, remainingMs).toInt()
+                val bytes = ByteArray(4_096)
+                val packet = DatagramPacket(bytes, bytes.size)
+                try {
+                    socket.receive(packet)
+                } catch (_: SocketTimeoutException) {
+                    continue
+                } catch (_: Exception) {
+                    return@withContext null
+                }
+                val response = runCatching {
+                    JSONObject(String(packet.data, packet.offset, packet.length, Charsets.UTF_8))
+                }.getOrNull() ?: continue
+                val candidate = response.optString("url").trim().trimEnd('/')
+                val responseHost = runCatching { URL(candidate).host }.getOrNull()
+                if (response.optString("app") == "thuishub"
+                    && response.optString("status") == "ok"
+                    && responseHost == packet.address.hostAddress
+                    && isSafeLocalServer(candidate)
+                ) return@withContext candidate
+            }
+        }
+        null
     }
 
     private suspend fun discoverServerOnLocalSubnet(): String? = coroutineScope {
@@ -935,13 +1009,14 @@ class MainActivity : ComponentActivity() {
             ?: return@coroutineScope null
         val address = link.address as Inet4Address
         val bytes = address.address.map { it.toInt() and 0xff }
-        val prefixLength = link.prefixLength.coerceIn(24, 30)
+        val prefixLength = link.prefixLength.coerceIn(22, 30)
         val hostBits = 32 - prefixLength
         val hostCount = 1 shl hostBits
         val localValue = bytes.fold(0) { value, part -> (value shl 8) or part }
         val networkMask = if (prefixLength == 0) 0 else -1 shl hostBits
         val networkValue = localValue and networkMask
         val candidates = (1 until hostCount - 1)
+            .sortedBy { host -> minOf(host, hostCount - 1 - host) }
             .map { networkValue or it }
             .filter { it != localValue }
             .map { value ->
@@ -949,7 +1024,7 @@ class MainActivity : ComponentActivity() {
                 "http://$host:8788"
             }
         val found = CompletableDeferred<String?>()
-        val semaphore = Semaphore(32)
+        val semaphore = Semaphore(64)
         val jobs = candidates.map { candidate ->
             launch(Dispatchers.IO) {
                 semaphore.withPermit {
@@ -957,7 +1032,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        val result = withTimeoutOrNull(5_000) { found.await() }
+        val result = withTimeoutOrNull(12_000) { found.await() }
         jobs.forEach { it.cancel() }
         result
     }
@@ -968,11 +1043,11 @@ class MainActivity : ComponentActivity() {
         var connection: HttpURLConnection? = null
         return try {
             val url = URL(candidate)
-            socket = Socket().apply { connect(InetSocketAddress(url.host, url.port), 450) }
+            socket = Socket().apply { connect(InetSocketAddress(url.host, url.port), 550) }
             connection = (URL("$candidate/api/health").openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 450
-                readTimeout = 700
+                connectTimeout = 650
+                readTimeout = 900
                 instanceFollowRedirects = false
                 useCaches = false
             }

@@ -18,6 +18,7 @@ import { assignedPrivateAddresses, restrictLanListener, startLanStreamingServer 
 import { discoverPlaybackDevices, registerPlaybackDiscoveryProvider, startPlaybackDeviceDiscovery, stopPlaybackDeviceDiscovery } from './playback-devices/discovery-service.js';
 import { createDlnaDiscoveryProvider, DlnaSsdpMonitor } from './playback-devices/providers/dlna.js';
 import { startThuisHubMdnsAdvertisement, stopThuisHubMdnsAdvertisement } from './playback-devices/mdns-advertiser.js';
+import { startMobileDiscoveryResponder, stopMobileDiscoveryResponder } from './mobile-discovery.js';
 import { attachPlaybackWebSockets, closePlaybackWebSockets } from './playback-devices/websocket.js';
 import { httpErrorPayload, httpErrorStatus } from './http-errors.js';
 
@@ -28,10 +29,12 @@ let dlnaMonitor: DlnaSsdpMonitor | null = null;
 
 async function rebindLanDiscoveryServices(address: string) {
   await stopThuisHubMdnsAdvertisement();
+  await stopMobileDiscoveryResponder();
   await dlnaMonitor?.stop();
   dlnaMonitor = null;
   if (getSetting('automaticDeviceDiscovery', 'true') !== 'true' || !assignedPrivateAddresses().includes(address)) return;
   startThuisHubMdnsAdvertisement();
+  startMobileDiscoveryResponder();
   if (getSetting('dlnaDiscoveryEnabled', 'true') !== 'true') return;
   const monitor = new DlnaSsdpMonitor({
     address,
@@ -95,9 +98,18 @@ const lanServer = startLanStreamingServer(app);
 attachPlaybackWebSockets(server, { lan: false });
 if (lanServer) {
   attachPlaybackWebSockets(lanServer, { lan: true });
-  lanServer.on('listening', () => startThuisHubMdnsAdvertisement());
-  lanServer.on('error', () => { void stopThuisHubMdnsAdvertisement(); });
-  lanServer.on('close', () => { void stopThuisHubMdnsAdvertisement(); });
+  lanServer.on('listening', () => {
+    startThuisHubMdnsAdvertisement();
+    startMobileDiscoveryResponder();
+  });
+  lanServer.on('error', () => {
+    void stopThuisHubMdnsAdvertisement();
+    void stopMobileDiscoveryResponder();
+  });
+  lanServer.on('close', () => {
+    void stopThuisHubMdnsAdvertisement();
+    void stopMobileDiscoveryResponder();
+  });
 }
 
 function shutdown() {
@@ -105,6 +117,7 @@ function shutdown() {
   log('INFO', 'server', 'Server wordt netjes afgesloten.');
   clearTranscodes();
   void stopThuisHubMdnsAdvertisement();
+  void stopMobileDiscoveryResponder();
   void dlnaMonitor?.stop();
   dlnaMonitor = null;
   void stopPlaybackDeviceDiscovery();
