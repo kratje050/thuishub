@@ -9,8 +9,8 @@ function bytes(value=0){if(value<1024)return`${value} B`;if(value<1048576)return
 function duration(seconds=0){const days=Math.floor(seconds/86400);const hours=Math.floor(seconds%86400/3600);return days?`${days}d ${hours}u`:`${hours}u ${Math.floor(seconds%3600/60)}m`}
 function triState(value:unknown){return value===true?'Zichtbaar':value===false?'Niet gezien':'Nog niet getest'}
 
-export default function ServerDashboard({settings,onSettingsChanged}:{settings:Settings;onSettingsChanged:()=>Promise<void>}){
-  const requested=(new URLSearchParams(location.search).get('section')||'overview') as Section;
+export default function ServerDashboard({settings,onSettingsChanged,initialSection}:{settings:Settings;onSettingsChanged:()=>Promise<void>;initialSection?:Section}){
+  const requested=(initialSection||new URLSearchParams(location.search).get('section')||'overview') as Section;
   const [section,setSection]=useState<Section>(sections.some(([id])=>id===requested)?requested:'overview');
   const [dashboard,setDashboard]=useState<any>(null);const[backups,setBackups]=useState<any>(null);const[database,setDatabase]=useState<any>(null);const[logs,setLogs]=useState<any>(null);const[tailscale,setTailscale]=useState<any>(null);const[updates,setUpdates]=useState<any>(null);const[devices,setDevices]=useState<any>({items:[]});const[playbackDevices,setPlaybackDevices]=useState<any>({items:[]});const[tvDiscovery,setTvDiscovery]=useState<any>(null);const[diagnosticReport,setDiagnosticReport]=useState<any>(null);const[pairCode,setPairCode]=useState('');
   const [message,setMessage]=useState('');const[error,setError]=useState('');const[busy,setBusy]=useState(false);const[logFilter,setLogFilter]=useState({category:'',level:'',search:'',date:''});
@@ -52,7 +52,7 @@ export default function ServerDashboard({settings,onSettingsChanged}:{settings:S
         <p className="dashboard-note">Updates komen tokenloos uit de openbare GitHub Releases-repository. Na jouw bevestiging wordt de installer vlak voor het starten nogmaals op naam, grootte en SHA-256 gecontroleerd. ThuisHub sluit af, verwijdert alleen de oude programmabestanden, installeert de nieuwe versie en start die automatisch. Gebruikersgegevens blijven behouden.</p>
       </Panel>}
       {section==='system'&&<Panel title="Systeeminformatie"><div className="detail-table"><span>Serverstatus<b>{dashboard.serverStatus}</b></span><span>Versie<b>{dashboard.version}</b></span><span>Encoder<b>{dashboard.encoder.codec}</b></span><span>Data-opslag<b>{bytes(dashboard.storage.dataBytes)}</b></span><span>Logopslag<b>{bytes(dashboard.storage.logBytes)}</b></span><span>Databasebestand<b>{dashboard.database.file}</b></span></div></Panel>}
-      {section==='about'&&<Panel title="Over ThuisHub"><div className="about-block"><img src="/brand/thuishub-logo.png" alt="ThuisHub"/><h2>ThuisHub {dashboard.version}</h2><p>Je eigen lokale mediaserver voor films, series, muziek, foto’s en Live TV. Geen abonnement en geen standaard openbare toegang.</p></div></Panel>}
+      {section==='about'&&<Panel title="Over ThuisHub"><div className="about-block"><img src="/brand/thuishub-logo.png" alt="ThuisHub"/><h2>ThuisHub {dashboard.version}</h2><p>Je eigen lokale mediaserver voor films, series, muziek, foto’s en Live TV, met standaard uitsluitend lokale en privétoegang.</p></div></Panel>}
     </main></div></section>
 }
 

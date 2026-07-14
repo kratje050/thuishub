@@ -420,13 +420,15 @@ apiRouter.get('/library', (req, res) => {
     id: item.id, kind: item.kind, title: item.title, year: item.year, seriesTitle: item.series_title,
     season: item.season, episode: item.episode, duration: item.duration, size: item.size,
     videoCodec: item.video_codec, audioCodec: item.audio_codec, width: item.width, height: item.height,
+    bitrate: item.bitrate, hdrType: item.hdr_type, dolbyVisionProfile: item.dolby_vision_profile,
+    audioChannels: item.audio_channels, audioLayout: item.audio_layout, atmos: Boolean(item.atmos), dtsX: Boolean(item.dts_x),
     overview: item.overview, posterUrl:imageApiUrl(item.id,'poster'),backdropUrl:imageApiUrl(item.id,'backdrop'),
     hasSubtitle: Boolean(item.subtitle_path), directPlay: isDirectPlayable(item),
     progress: item.position ? { position: item.position, duration: item.progress_duration, completed: Boolean(item.completed) } : null,
     state: { favorite: Boolean(item.favorite), watchlist: Boolean(item.watchlist), watched: Boolean(item.watched || item.completed), rating: item.user_rating },
     contentRating: item.content_rating, originalContentRating:item.original_content_rating, genres: JSON.parse(item.genres || '[]'), edition: item.edition, tagline: item.tagline,metadataProvider:item.metadata_provider,metadataConfidence:item.metadata_match_confidence,metadataNeedsReview:Boolean(item.metadata_needs_review),
     originalTitle:item.original_title,sortTitle:item.sort_title,runtimeMinutes:item.metadata_runtime_minutes,language:item.metadata_language,country:item.metadata_country,studio:item.studio,directors:JSON.parse(item.directors||'[]'),writers:JSON.parse(item.writers||'[]'),cast:JSON.parse(item.cast_json||'[]'),ratings:JSON.parse(item.ratings_json||'[]'),premiered:item.premiered,officialUrl:item.official_url,absoluteEpisode:item.absolute_episode,aired:item.aired,
-    hdr: ['smpte2084','arib-std-b67'].includes((item.color_transfer || '').toLowerCase())
+    hdr: item.hdr_type && item.hdr_type !== 'sdr', createdAt:item.created_at, updatedAt:item.updated_at
   })));
 });
 
@@ -576,6 +578,38 @@ apiRouter.get('/optimizations', (_req,res)=>res.json(optimizationList()));
 apiRouter.post('/media/:id/optimize', (req,res)=>{const profile=['mobile','1080p','original'].includes(req.body.profile)?req.body.profile:'1080p';res.status(202).json({id:queueOptimization(Number(req.params.id),profile)});});
 apiRouter.get('/optimizations/:id/download',(req,res)=>{const file=optimizedFile(Number(req.params.id));if(!file)return res.status(404).json({error:'De geoptimaliseerde versie is nog niet gereed.'});res.download(file,path.basename(file));});
 
+function cpuSnapshot(){
+  return os.cpus().reduce((result,cpu)=>{
+    const total=Object.values(cpu.times).reduce((sum,value)=>sum+value,0);
+    return {idle:result.idle+cpu.times.idle,total:result.total+total};
+  },{idle:0,total:0});
+}
+
+async function systemMetrics(){
+  const before=cpuSnapshot();
+  await new Promise(resolve=>setTimeout(resolve,120));
+  const after=cpuSnapshot();
+  const elapsed=Math.max(1,after.total-before.total);
+  const cpuUsagePercent=Math.max(0,Math.min(100,Math.round((1-(after.idle-before.idle)/elapsed)*1000)/10));
+  const memoryTotalBytes=os.totalmem();
+  const memoryUsedBytes=Math.max(0,memoryTotalBytes-os.freemem());
+  let disk:{totalBytes:number;freeBytes:number;usedBytes:number;usagePercent:number}|null=null;
+  try{
+    const stats=fs.statfsSync(appPaths.dataDir);
+    const totalBytes=Number(stats.blocks)*Number(stats.bsize);
+    const freeBytes=Number(stats.bavail)*Number(stats.bsize);
+    const usedBytes=Math.max(0,totalBytes-freeBytes);
+    disk={totalBytes,freeBytes,usedBytes,usagePercent:totalBytes?Math.round(usedBytes/totalBytes*1000)/10:0};
+  }catch{/* Een onbekend bestandssysteem wordt als onbekend aan de interface doorgegeven. */}
+  return {
+    platform:{name:os.platform()==='win32'?'Windows':os.type(),release:os.release(),version:os.version(),hostname:os.hostname()},
+    cpu:{usagePercent:cpuUsagePercent,model:os.cpus()[0]?.model||'Onbekend',cores:os.cpus().length},
+    memory:{usedBytes:memoryUsedBytes,totalBytes:memoryTotalBytes,usagePercent:memoryTotalBytes?Math.round(memoryUsedBytes/memoryTotalBytes*1000)/10:0},
+    disk,
+    network:{downloadBytesPerSecond:null,uploadBytesPerSecond:null,available:false,interfaces:assignedPrivateAddresses()},
+  };
+}
+
 apiRouter.get('/dashboard', requireAdmin, async (_req,res)=>{
   const stats=db.prepare(`SELECT COUNT(*) items,COALESCE(SUM(size),0) bytes,COALESCE(SUM(duration),0) duration FROM media_items`).get();
   const counts=db.prepare('SELECT kind,COUNT(*) count FROM media_items GROUP BY kind').all();
@@ -590,7 +624,8 @@ apiRouter.get('/dashboard', requireAdmin, async (_req,res)=>{
   const tailscale=await tailscaleStatus();
   const backups=listBackups();
   const lastUpdate=JSON.parse(getSetting('lastUpdateResult','{}')||'{}');
-  res.json({version:APP_VERSION,name:APP_NAME,uptimeSeconds:Math.round(process.uptime()),serverStatus:'online',database:{...integrity,file:appPaths.databaseFile},lastBackup:backups[0]||null,update:lastUpdate,tailscale,stats,counts,libraryCounts,metadata:metadataDashboard(),activity:listActivity(),gpus:detectedGpus(),encoder:videoEncoder(),recent,optimizations:optimizationList(),storage:{libraryBytes:(stats as any).bytes,dataBytes:directorySize(appPaths.dataDir),logBytes:logStorageBytes()},warnings:[...(!integrity.ok?['De database-integriteitscontrole meldt een probleem.']:[]),...(!tailscale.serveActive?['Externe toegang via Tailscale Serve is niet actief.']:[]),...(backups.length===0?['Er is nog geen back-up gemaakt.']:[])]});
+  const system=await systemMetrics();
+  res.json({version:APP_VERSION,name:APP_NAME,uptimeSeconds:Math.round(process.uptime()),serverStatus:'online',database:{...integrity,file:appPaths.databaseFile},lastBackup:backups[0]||null,update:lastUpdate,tailscale,stats,counts,libraryCounts,metadata:metadataDashboard(),activity:listActivity(),gpus:detectedGpus(),encoder:videoEncoder(),recent,optimizations:optimizationList(),storage:{libraryBytes:(stats as any).bytes,dataBytes:directorySize(appPaths.dataDir),logBytes:logStorageBytes(),disk:system.disk},system,warnings:[...(!integrity.ok?['De database-integriteitscontrole meldt een probleem.']:[]),...(!tailscale.serveActive?['Externe toegang via Tailscale Serve is niet actief.']:[]),...(backups.length===0?['Er is nog geen back-up gemaakt.']:[])]});
 });
 
 function directorySize(directory:string):number{if(!fs.existsSync(directory))return 0;let total=0;for(const entry of fs.readdirSync(directory,{withFileTypes:true})){const file=path.join(directory,entry.name);try{total+=entry.isDirectory()?directorySize(file):fs.statSync(file).size}catch{}}return total}

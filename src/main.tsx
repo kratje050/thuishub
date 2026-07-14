@@ -7,6 +7,8 @@ import './media-libraries.css';
 import './live-tv.css';
 import './dashboard.css';
 import './brand.css';
+import './theme.css';
+import './reference-ui.css';
 
 createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);
 

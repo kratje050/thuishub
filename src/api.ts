@@ -10,6 +10,7 @@ export type MediaItem = {
   progress?: { position: number; duration: number; completed: boolean } | null;
   state: { favorite: boolean; watchlist: boolean; watched: boolean; rating?: number | null };
   contentRating?: string;originalContentRating?:string; genres: string[]; edition?: string; tagline?: string; hdr?: boolean;metadataProvider?:string;metadataConfidence?:string;metadataNeedsReview?:boolean;originalTitle?:string;sortTitle?:string;runtimeMinutes?:number;language?:string;country?:string;studio?:string;directors?:string[];writers?:string[];cast?:Array<{name:string;character?:string}>;ratings?:Array<{source:string;value:number;maxValue:number}>;premiered?:string;officialUrl?:string;absoluteEpisode?:number;aired?:string;
+  bitrate?:number;hdrType?:string;dolbyVisionProfile?:number;audioChannels?:number;audioLayout?:string;atmos?:boolean;dtsX?:boolean;createdAt?:string;updatedAt?:string;
 };
 export type Bootstrap = { user: User; settings: Settings; sources: Source[]; scan: ScanState; networkUrls: string[] };
 
