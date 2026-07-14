@@ -1,5 +1,11 @@
 # Wijzigingen
 
+## 1.2.20 - 14 juli 2026
+
+- Android stuurt lokale servercontroles en bibliotheekverzoeken expliciet via wifi of ethernet, ook wanneer een VPN of mobiele voorkeursroute actief is.
+- UDP-detectie, de directe subnetcontrole en gewone API-verzoeken gebruiken voortaan consequent dezelfde lokale netwerkverbinding.
+- Na een mislukte eerste zoekpoging blijft de app automatisch opnieuw zoeken totdat de gebruiker annuleert of ThuisHub is gevonden.
+
 ## 1.2.19 - 14 juli 2026
 
 - Android vraagt nu expliciet toestemming voor apparaten in de buurt en lokale netwerktoegang voordat de app naar de ThuisHub-pc zoekt.

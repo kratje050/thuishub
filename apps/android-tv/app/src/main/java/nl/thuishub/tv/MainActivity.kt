@@ -13,6 +13,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.MediaCodecList
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.nsd.NsdManager
@@ -91,7 +92,7 @@ class MainActivity : ComponentActivity() {
         private const val NEARBY_WIFI_PERMISSION = "android.permission.NEARBY_WIFI_DEVICES"
         private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
         private const val LOCAL_NETWORK_PERMISSION_REQUEST = 8789
-        private const val APP_VERSION = "1.2.19"
+        private const val APP_VERSION = "1.2.20"
         private const val UPDATE_MANIFEST_URL = "https://github.com/kratje050/thuishub/releases/latest/download/latest.json"
         private const val MAX_MANIFEST_BYTES = 256 * 1024
         private const val MAX_APK_BYTES = 200L * 1024 * 1024
@@ -236,9 +237,14 @@ class MainActivity : ComponentActivity() {
                 ellipsize = TextUtils.TruncateAt.END
             })
             addView(TextView(this@MainActivity).apply {
-                text = if (server.isNotBlank() && token.isNotBlank()) "● Verbonden" else "ThuisHub Android"
+                val verified = serverConfirmed && server.isNotBlank() && token.isNotBlank()
+                text = when {
+                    verified -> "● Verbonden"
+                    server.isNotBlank() -> "Server opgeslagen"
+                    else -> "ThuisHub Android"
+                }
                 textSize = 12f
-                setTextColor(if (server.isNotBlank() && token.isNotBlank()) COLOR_CYAN else COLOR_MUTED)
+                setTextColor(if (verified) COLOR_CYAN else COLOR_MUTED)
             })
         }, LinearLayout.LayoutParams(0, -2, 1f))
         if (currentScreen != AppScreen.SETTINGS) header.addView(TextView(this).apply {
@@ -1237,7 +1243,8 @@ class MainActivity : ComponentActivity() {
             }
             startDiscovery()
             delay(1_500)
-            if (connectionAttemptActive && !serverConfirmed) {
+            var attempt = 0
+            while (connectionAttemptActive && !serverConfirmed) {
                 updateStatus("ThuisHub wordt snel op je lokale netwerk gezocht…")
                 val advertised = discoverServerByBroadcast()
                 if (advertised != null && connectionAttemptActive && !serverConfirmed && verifyServer(advertised)) {
@@ -1245,12 +1252,18 @@ class MainActivity : ComponentActivity() {
                     return@launch
                 }
                 if (!connectionAttemptActive || serverConfirmed) return@launch
-                updateStatus("ThuisHub wordt rechtstreeks op je lokale netwerk gezocht…")
-                val candidate = discoverServerOnLocalSubnet()
-                if (candidate != null && connectionAttemptActive && !serverConfirmed) selectServer(candidate)
-                else if (connectionAttemptActive && !serverConfirmed) {
-                    updateStatus("Geen ThuisHub gevonden. Controleer of de pc-app draait of gebruik Handmatig adres.")
+                if (attempt == 0) {
+                    updateStatus("ThuisHub wordt rechtstreeks op je lokale netwerk gezocht…")
+                    val candidate = discoverServerOnLocalSubnet()
+                    if (candidate != null && connectionAttemptActive && !serverConfirmed) {
+                        selectServer(candidate)
+                        return@launch
+                    }
                 }
+                if (!connectionAttemptActive || serverConfirmed) return@launch
+                updateStatus("Nog geen ThuisHub gevonden. Automatisch opnieuw zoeken…")
+                attempt += 1
+                delay(5_000)
             }
         }
     }
@@ -1417,11 +1430,20 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) { false }
     }
 
+    private fun localLanNetwork(): Network? {
+        val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        return connectivity.allNetworks.firstOrNull { candidate ->
+            val capabilities = connectivity.getNetworkCapabilities(candidate) ?: return@firstOrNull false
+            val localTransport = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+            localTransport && connectivity.getLinkProperties(candidate)?.linkAddresses
+                ?.any { it.address is Inet4Address && it.address.isSiteLocalAddress } == true
+        }
+    }
+
     private suspend fun discoverServerByBroadcast(): String? = withContext(Dispatchers.IO) {
         val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = connectivity.allNetworks.firstOrNull { candidate ->
-            connectivity.getNetworkCapabilities(candidate)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-        } ?: connectivity.activeNetwork ?: return@withContext null
+        val network = localLanNetwork() ?: return@withContext null
         val link = connectivity.getLinkProperties(network)?.linkAddresses
             ?.firstOrNull { it.address is Inet4Address && it.address.isSiteLocalAddress }
             ?: return@withContext null
@@ -1476,14 +1498,9 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun discoverServerOnLocalSubnet(): String? = coroutineScope {
         val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val wifiNetwork = connectivity.allNetworks.firstOrNull { network ->
-            connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-        }
-        val candidateNetworks = listOfNotNull(wifiNetwork, connectivity.activeNetwork).distinct()
-        val link = candidateNetworks.asSequence()
-            .mapNotNull { connectivity.getLinkProperties(it) }
-            .flatMap { it.linkAddresses.asSequence() }
-            .firstOrNull { it.address is Inet4Address && it.address.isSiteLocalAddress }
+        val network = localLanNetwork() ?: return@coroutineScope null
+        val link = connectivity.getLinkProperties(network)?.linkAddresses
+            ?.firstOrNull { it.address is Inet4Address && it.address.isSiteLocalAddress }
             ?: return@coroutineScope null
         val address = link.address as Inet4Address
         val bytes = address.address.map { it.toInt() and 0xff }
@@ -1506,7 +1523,7 @@ class MainActivity : ComponentActivity() {
         val jobs = candidates.map { candidate ->
             launch(Dispatchers.IO) {
                 semaphore.withPermit {
-                    if (!found.isCompleted && verifyServerFast(candidate)) found.complete(candidate)
+                    if (!found.isCompleted && verifyServerFast(candidate, network)) found.complete(candidate)
                 }
             }
         }
@@ -1515,14 +1532,17 @@ class MainActivity : ComponentActivity() {
         result
     }
 
-    private fun verifyServerFast(candidate: String): Boolean {
+    private fun verifyServerFast(candidate: String, network: Network): Boolean {
         if (!isSafeLocalServer(candidate)) return false
         var socket: Socket? = null
         var connection: HttpURLConnection? = null
         return try {
             val url = URL(candidate)
-            socket = Socket().apply { connect(InetSocketAddress(url.host, url.port), 550) }
-            connection = (URL("$candidate/api/health").openConnection() as HttpURLConnection).apply {
+            socket = Socket().apply {
+                network.bindSocket(this)
+                connect(InetSocketAddress(url.host, url.port), 550)
+            }
+            connection = (network.openConnection(URL("$candidate/api/health")) as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 650
                 readTimeout = 900
@@ -2254,7 +2274,11 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun rawRequest(base: String, path: String, method: String, body: String?, authorized: Boolean): String = withContext(Dispatchers.IO) {
         if (base.isBlank()) throw IllegalStateException("ThuisHub is nog niet gevonden.")
-        val connection = (URL(base + path).openConnection() as HttpURLConnection).apply {
+        val target = URL(base + path)
+        val opened = if (isSafeLocalServer(base)) {
+            localLanNetwork()?.openConnection(target) ?: target.openConnection()
+        } else target.openConnection()
+        val connection = (opened as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 8_000
             readTimeout = 15_000

@@ -17,7 +17,7 @@ describe('Windows-distributie', () => {
 
   it('configureert portable, installer en veilige upgrade', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
-    expect(packageJson.version).toBe('1.2.19');
+    expect(packageJson.version).toBe('1.2.20');
     expect(packageJson.build.nsis.artifactName).toContain('ThuisHub-Setup');
     expect(packageJson.build.nsis.deleteAppDataOnUninstall).toBe(false);
     expect(packageJson.build.nsis.useZip).toBe(false);
@@ -48,6 +48,9 @@ describe('Windows-distributie', () => {
     expect(manifest).toContain('android.permission.ACCESS_LOCAL_NETWORK');
     expect(activity).toContain('ensureLocalNetworkPermission(showProgressScreen)');
     expect(activity).toContain('startConnection(pendingConnectionProgressScreen)');
+    expect(activity).toContain('network.bindSocket(this)');
+    expect(activity).toContain('localLanNetwork()?.openConnection(target)');
+    expect(activity).toContain('Automatisch opnieuw zoeken');
   });
 
   it('accepteert alleen de exacte gecontroleerde installer en verwijdert het overdrachtsbestand', () => {
