@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
 import android.media.MediaCodecList
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
@@ -36,10 +38,15 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -49,6 +56,8 @@ import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.URL
 import java.security.MessageDigest
 import java.util.UUID
@@ -56,7 +65,7 @@ import java.util.UUID
 class MainActivity : ComponentActivity() {
     companion object {
         private const val SERVICE_TYPE = "_thuishub._tcp."
-        private const val APP_VERSION = "1.2.7"
+        private const val APP_VERSION = "1.2.8"
         private const val UPDATE_MANIFEST_URL = "https://github.com/kratje050/thuishub/releases/latest/download/latest.json"
         private const val MAX_MANIFEST_BYTES = 256 * 1024
         private const val MAX_APK_BYTES = 200L * 1024 * 1024
@@ -654,6 +663,15 @@ class MainActivity : ComponentActivity() {
                 updateStatus("ThuisHub wordt op je thuisnetwerk gezocht…")
             }
             startDiscovery()
+            delay(2_000)
+            if (connectionAttemptActive && !serverConfirmed) {
+                updateStatus("ThuisHub wordt rechtstreeks op je lokale netwerk gezocht…")
+                val candidate = discoverServerOnLocalSubnet()
+                if (candidate != null && connectionAttemptActive && !serverConfirmed) selectServer(candidate)
+                else if (connectionAttemptActive && !serverConfirmed) {
+                    updateStatus("Geen ThuisHub gevonden. Controleer of de pc-app draait of gebruik Handmatig adres.")
+                }
+            }
         }
     }
 
@@ -784,6 +802,72 @@ class MainActivity : ComponentActivity() {
             val health = JSONObject(rawRequest(candidate, "/api/health", "GET", null, false))
             health.optString("app") == "thuishub" && health.optString("status") == "ok"
         } catch (_: Exception) { false }
+    }
+
+    private suspend fun discoverServerOnLocalSubnet(): String? = coroutineScope {
+        val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val wifiNetwork = connectivity.allNetworks.firstOrNull { network ->
+            connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        }
+        val candidateNetworks = listOfNotNull(wifiNetwork, connectivity.activeNetwork).distinct()
+        val link = candidateNetworks.asSequence()
+            .mapNotNull { connectivity.getLinkProperties(it) }
+            .flatMap { it.linkAddresses.asSequence() }
+            .firstOrNull { it.address is Inet4Address && it.address.isSiteLocalAddress }
+            ?: return@coroutineScope null
+        val address = link.address as Inet4Address
+        val bytes = address.address.map { it.toInt() and 0xff }
+        val prefixLength = link.prefixLength.coerceIn(24, 30)
+        val hostBits = 32 - prefixLength
+        val hostCount = 1 shl hostBits
+        val localValue = bytes.fold(0) { value, part -> (value shl 8) or part }
+        val networkMask = if (prefixLength == 0) 0 else -1 shl hostBits
+        val networkValue = localValue and networkMask
+        val candidates = (1 until hostCount - 1)
+            .map { networkValue or it }
+            .filter { it != localValue }
+            .map { value ->
+                val host = listOf(24, 16, 8, 0).joinToString(".") { shift -> ((value ushr shift) and 0xff).toString() }
+                "http://$host:8788"
+            }
+        val found = CompletableDeferred<String?>()
+        val semaphore = Semaphore(32)
+        val jobs = candidates.map { candidate ->
+            launch(Dispatchers.IO) {
+                semaphore.withPermit {
+                    if (!found.isCompleted && verifyServerFast(candidate)) found.complete(candidate)
+                }
+            }
+        }
+        val result = withTimeoutOrNull(5_000) { found.await() }
+        jobs.forEach { it.cancel() }
+        result
+    }
+
+    private fun verifyServerFast(candidate: String): Boolean {
+        if (!isSafeLocalServer(candidate)) return false
+        var socket: Socket? = null
+        var connection: HttpURLConnection? = null
+        return try {
+            val url = URL(candidate)
+            socket = Socket().apply { connect(InetSocketAddress(url.host, url.port), 450) }
+            connection = (URL("$candidate/api/health").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 450
+                readTimeout = 700
+                instanceFollowRedirects = false
+                useCaches = false
+            }
+            if (connection.responseCode != 200) return false
+            val body = connection.inputStream.bufferedReader().use { it.readText().take(4_096) }
+            val health = JSONObject(body)
+            health.optString("app") == "thuishub" && health.optString("status") == "ok"
+        } catch (_: Exception) {
+            false
+        } finally {
+            runCatching { socket?.close() }
+            connection?.disconnect()
+        }
     }
 
     private fun isSafeLocalServer(candidate: String): Boolean {

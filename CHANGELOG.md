@@ -1,5 +1,11 @@
 # Wijzigingen
 
+## 1.2.8 — 14 juli 2026
+
+- Android zoekt na een mislukte mDNS-detectie automatisch verder op het eigen privé-wifisubnet.
+- De fallback controleert alleen TCP-poort 8788 en accepteert uitsluitend een server die zich via `/api/health` als ThuisHub identificeert.
+- De zoektocht is begrensd in tijd en gelijktijdigheid en stopt direct zodra een geldige server is gevonden.
+
 ## 1.2.7 — 14 juli 2026
 
 - Automatisch zoeken en verbinden staat op nieuwe Android-installaties standaard aan, zonder Home, Instellingen of Updates te blokkeren.

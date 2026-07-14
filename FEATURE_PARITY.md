@@ -1,6 +1,6 @@
-# ThuisHub functiepariteit 1.2.7
+# ThuisHub functiepariteit 1.2.8
 
-Deze tabel beschrijft ThuisHub 1.2.7.
+Deze tabel beschrijft ThuisHub 1.2.8.
 
 | Onderdeel | Status | Opmerking |
 |---|---|---|

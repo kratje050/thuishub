@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="https://thuishub.invalid/tv" version="1.2.7" viewmodes="maximized">
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets" id="https://thuishub.invalid/tv" version="1.2.8" viewmodes="maximized">
   <tizen:application id="Thuishub.TV" package="Thuishub" required_version="5.0"/>
   <content src="index.html"/><name>ThuisHub</name><icon src="icon.png"/>
   <feature name="http://tizen.org/feature/screen.size.all"/>
