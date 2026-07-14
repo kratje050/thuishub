@@ -118,6 +118,7 @@ export type PlaybackDecision = {
   targetBitrateMbps?: number;
   targetWidth?: number;
   targetHeight?: number;
+  targetAudioChannels?: number;
   network: NetworkType;
 };
 
@@ -225,7 +226,9 @@ export function decisionEngine(input: PlaybackInput): PlaybackDecision {
     outputAudioCodec: mustTranscodeAudio ? (device.eac3 && has(device.audioCodecs, 'eac3') ? 'eac3' : has(device.audioCodecs, 'ac3') ? 'ac3' : 'aac') : media.audioCodec,
     copyVideo: !mustTranscodeVideo, copyAudio: !mustTranscodeAudio, burnSubtitles, preserveHdr: !mustTranscodeVideo && preserveHdr,
     preserveDolbyVision: !mustTranscodeVideo && preserveDolbyVision, preserveAtmos: !mustTranscodeAudio && preserveAtmos, hdrFallback,
-    targetBitrateMbps: Math.min(bitrateLimit || device.maxBitrateMbps, device.maxBitrateMbps), targetWidth, targetHeight, network: input.network || 'unknown'
+    targetBitrateMbps: Math.min(bitrateLimit || device.maxBitrateMbps, device.maxBitrateMbps), targetWidth, targetHeight,
+    targetAudioChannels: mustTranscodeAudio ? Math.max(1, Math.min(media.audioChannels || 2, device.maxAudioChannels || 2)) : media.audioChannels,
+    network: input.network || 'unknown'
   };
 }
 

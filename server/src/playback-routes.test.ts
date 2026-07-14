@@ -110,12 +110,14 @@ describe('beveiligde playbackroutes', () => {
   });
 
   it('maakt snel een zelfstandig eerste HLS-segment voor NVIDIA en andere encoders', () => {
-    expect(transcodeInternals.HLS_SEGMENT_SECONDS).toBe(1);
+    expect(transcodeInternals.HLS_FIRST_SEGMENT_SECONDS).toBe(1);
+    expect(transcodeInternals.HLS_SEGMENT_SECONDS).toBe(3);
     expect(transcodeInternals.hlsKeyframeArgs('h264_nvenc')).toEqual([
       '-forced-idr', '1', '-force_key_frames', 'expr:gte(t,n_forced*1)',
     ]);
     expect(transcodeInternals.hlsKeyframeArgs('libx264')).toEqual([
       '-force_key_frames', 'expr:gte(t,n_forced*1)',
     ]);
+    expect(transcodeInternals.inputSeekArgs(8 * 60 + 3)).toEqual(['-ss', '483.000']);
   });
 });

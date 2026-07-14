@@ -14,7 +14,8 @@ import { getSetting, markCleanShutdown } from './db.js';
 import { log, setMaxLogStorageMb } from './logger.js';
 import { checkForUpdates } from './updates.js';
 import { playbackRouter } from './routes/playback.js';
-import { assignedPrivateAddresses, restrictLanListener, startLanStreamingServer } from './network.js';
+import { assignedPrivateAddresses, restrictLanListener, startExternalStreamingServer, startLanStreamingServer } from './network.js';
+import { refreshExternalAccessMapping, removeExternalPortMapping } from './port-mapping.js';
 import { discoverPlaybackDevices, registerPlaybackDiscoveryProvider, startPlaybackDeviceDiscovery, stopPlaybackDeviceDiscovery } from './playback-devices/discovery-service.js';
 import { createDlnaDiscoveryProvider, DlnaSsdpMonitor } from './playback-devices/providers/dlna.js';
 import { startThuisHubMdnsAdvertisement, stopThuisHubMdnsAdvertisement } from './playback-devices/mdns-advertiser.js';
@@ -93,8 +94,10 @@ const server = app.listen(port, host, () => {
   console.log(`\n${APP_NAME} ${APP_VERSION} draait op http://localhost:${port}\n`);
   log('INFO', 'server', 'Server gestart.', { host, port });
   void checkForUpdates();
+  void refreshExternalAccessMapping();
 });
 const lanServer = startLanStreamingServer(app);
+const externalServer = startExternalStreamingServer(app);
 attachPlaybackWebSockets(server, { lan: false });
 if (lanServer) {
   attachPlaybackWebSockets(lanServer, { lan: true });
@@ -111,8 +114,12 @@ if (lanServer) {
     void stopMobileDiscoveryResponder();
   });
 }
+externalServer?.on('listening', () => { void refreshExternalAccessMapping(); });
 
-function shutdown() {
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
   markCleanShutdown();
   log('INFO', 'server', 'Server wordt netjes afgesloten.');
   clearTranscodes();
@@ -122,14 +129,16 @@ function shutdown() {
   dlnaMonitor = null;
   void stopPlaybackDeviceDiscovery();
   closePlaybackWebSockets();
+  await removeExternalPortMapping();
   server.close(() => process.exit(0));
   lanServer?.close();
+  externalServer?.close();
 }
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT', () => { void shutdown(); });
+process.on('SIGTERM', () => { void shutdown(); });
 process.on('uncaughtException', error => {
   log('CRITICAL', 'crash', 'Onverwachte serverfout.', { error: error.message, stack: error.stack });
-  shutdown();
+  void shutdown();
 });
 process.on('unhandledRejection', error => log('CRITICAL', 'crash', 'Niet-afgehandelde promise.', { error: error instanceof Error ? error.message : String(error) }));
 

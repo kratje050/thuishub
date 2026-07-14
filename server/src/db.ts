@@ -519,6 +519,8 @@ export function publicSettings() {
     ,localStreamingEnabled: getSetting('localStreamingEnabled', 'false') === 'true'
     ,localStreamingAddress: getSetting('localStreamingAddress', '')
     ,localStreamingPort: Number(getSetting('localStreamingPort', '8788'))
+    ,externalAccessMode: getSetting('externalAccessMode', 'home')
+    ,externalAccessPort: Number(getSetting('externalAccessPort', '8790'))
     ,automaticDeviceDiscovery: getSetting('automaticDeviceDiscovery', 'true') === 'true'
     ,dlnaDiscoveryEnabled: getSetting('dlnaDiscoveryEnabled', 'true') === 'true'
     ,deviceRetentionDays: Number(getSetting('deviceRetentionDays', '30'))

@@ -10,6 +10,8 @@ export type PlaybackGrantOptions = {
   targetBitrateMbps?: number;
   targetWidth?: number;
   targetHeight?: number;
+  targetAudioChannels?: number;
+  startPosition?: number;
 };
 
 export type PlaybackGrant = {

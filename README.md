@@ -1,10 +1,17 @@
-# ThuisHub 1.2.14
+# ThuisHub 1.2.15
 
 ThuisHub is een lokale Windows-mediaserver voor eigen films, series, muziek, foto's en Live TV/DVR. De beheerinterface blijft op `http://127.0.0.1:8787`; de Windows-app en browser gebruiken dezelfde lokale gegevens in `%APPDATA%\ThuisHub\data`.
 
 ## Metadata
 
 De ontwikkelversie gebruikt een modulaire metadata-laag: TVmaze voor series, optioneel OMDb voor films, lokale Kodi-NFO-bestanden, ingebedde bestandstags en een handmatige editor met veldlocks en herstelhistorie. API-keys blijven lokaal; externe afbeeldingen worden gecontroleerd en gecachet voordat de browser ze toont. Zie [Metadata en providers](docs/METADATA_PROVIDERS.md).
+
+## Nieuw in 1.2.15
+
+- Films hervatten direct op de juiste positie en het eerste bruikbare segment is aanzienlijk sneller beschikbaar.
+- Audio-only transcoding laat de video ongemoeid en zet alleen kanalen of audiocodec om.
+- NVIDIA hardwaredecode en -encode worden werkelijk gecontroleerd en zichtbaar gemaakt in Technische informatie.
+- Externe toegang is kiesbaar: alleen thuisnetwerk, automatisch via UPnP/NAT-PMP of Tailscale.
 
 ## Nieuw in 1.2.14
 
@@ -114,7 +121,7 @@ De softwarelogica en builds worden geautomatiseerd gecontroleerd, maar er is voo
 ## Starten
 
 - Geïnstalleerd: open **ThuisHub** via Start of de bureaubladsnelkoppeling.
-- Portable: open `release\ThuisHub-Portable-1.2.14.exe`.
+- Portable: open `release\ThuisHub-Portable-1.2.15.exe`.
 - Browser/server: dubbelklik `ThuisHub starten.cmd`.
 - Volledig afsluiten: kies **ThuisHub afsluiten** in het systeemvak.
 
@@ -151,7 +158,7 @@ npm run dist:win
 Releasegegevens maakt u na de builds met:
 
 ```powershell
-.\scripts\generate-release-metadata.ps1 -Version 1.2.14
+.\scripts\generate-release-metadata.ps1 -Version 1.2.15
 .\scripts\scan-release-secrets.ps1 -IncludeReleaseArtifacts
 ```
 

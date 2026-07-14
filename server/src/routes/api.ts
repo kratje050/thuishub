@@ -13,8 +13,8 @@ import { cacheExternalImage, cacheLocalImage, clearMetadataImageCache, imageApiU
 import { clearProviderCache, providerOrder, setProviderEnabled, setProviderOrder } from '../metadata/store.js';
 import { clearOmdbApiKey, getOmdbApiKey, secretsStatus, setOmdbApiKey } from '../metadata/secrets.js';
 import type { MetadataProviderId } from '../metadata/types.js';
-import { ensureHls, hlsFile, isDirectPlayable } from '../transcode.js';
-import { detectedGpus, videoEncoder } from '../ffmpeg.js';
+import { ensureHls, hlsFile, isDirectPlayable, releaseHls } from '../transcode.js';
+import { detectedGpus, videoEncoder, videoTranscodePlan } from '../ffmpeg.js';
 import { listActivity, patchActivity, removeActivity, updateActivity } from '../activity.js';
 import { audit, emitWebhook } from '../webhooks.js';
 import { optimizedFile, optimizationList, queueOptimization } from '../optimizer.js';
@@ -31,7 +31,8 @@ import { BROWSER_CAPABILITIES, CAST_CAPABILITIES, QUALITY_PROFILES, decisionEngi
 import { mediaCapabilitiesFromRow } from '../media-info.js';
 import { createPlaybackGrant, createPlaybackToken, renewPlaybackGrant } from '../playback-tokens.js';
 import { acknowledgeDeviceCommand, approvePairing, claimPairing, deviceCapabilities, forgetDevice, listDevices, pendingDeviceCommands, requestPairing, requireDevice, setDeviceOverrides } from '../devices.js';
-import { assignedPrivateAddresses, isLanListenerEndpoint, isPrivateIpv4, isValidLanStreamingPort, lanPlaybackBaseUrl, lanStreamingStatus } from '../network.js';
+import { assignedPrivateAddresses, externalStreamingStatus, isLanListenerEndpoint, isPrivateIpv4, isValidLanStreamingPort, lanPlaybackBaseUrl, lanStreamingStatus, reconfigureExternalStreamingServer } from '../network.js';
+import { externalAccessStatus, refreshExternalAccessMapping } from '../port-mapping.js';
 import { playbackDeviceRegistry } from '../playback-devices/registry.js';
 import { diagnostics as playbackDiscoveryDiagnostics, discoverPlaybackDevices } from '../playback-devices/discovery-service.js';
 import { controlPlaybackSession, createPlaybackSession, getActivePlaybackSession, getPlaybackSession, listActivePlaybackSessions, playbackTransferSourceId, stopPlaybackSession, updatePlaybackSession } from '../playback-devices/sessions.js';
@@ -73,7 +74,7 @@ apiRouter.post('/device/media/:id/session',requireDevice,async(req,res,next)=>{t
   broadcastPlaybackSession(result.session);
   res.status(201).json(result);
 }catch(error){next(error)}});
-apiRouter.post('/device/media/:id/decision',requireDevice,(req,res)=>{const mediaId=Number(req.params.id);const row=db.prepare('SELECT * FROM media_items WHERE id=?').get(mediaId) as any;if(!row)return res.status(404).json({error:'Media niet gevonden.'});const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;if(!profile||!ratingAllowed(row.content_rating,profile.maxRating,profile.role==='admin'))return res.status(403).json({error:'Dit profiel mag deze media niet afspelen.'});const capabilities=deviceCapabilities(req.playbackDevice!.id);if(!capabilities)return res.status(403).json({error:'Apparaatprofiel ontbreekt.'});const base=lanPlaybackBaseUrl();if(!base)return res.status(409).json({error:'De priv\u00e9-LAN-streamserver is niet actief. Start ThuisHub opnieuw nadat je thuisnetwerkstreaming hebt ingesteld.'});const decision=decisionEngine({media:mediaCapabilitiesFromRow(row),device:capabilities,quality:(req.body?.quality||'auto') as QualityId,availableBandwidthMbps:Number(req.body?.availableBandwidthMbps)||undefined,network:'lan'});const resource=decision.mode==='direct_play'?'file':'hls';const token=createPlaybackToken({mediaId,resource,userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id,options:{copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight}},resource==='file'?600:3600);const subtitle=row.subtitle_path?createPlaybackToken({mediaId,resource:'subtitle',userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id},3600):'';res.json({decision,technical:mediaCapabilitiesFromRow(row),urls:{playback:`${base}/api/playback/${mediaId}/${resource==='file'?'file':'hls/index.m3u8'}?token=${encodeURIComponent(token)}`,subtitle:subtitle?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitle)}`:''}})});
+apiRouter.post('/device/media/:id/decision',requireDevice,(req,res)=>{const mediaId=Number(req.params.id);const row=db.prepare('SELECT * FROM media_items WHERE id=?').get(mediaId) as any;if(!row)return res.status(404).json({error:'Media niet gevonden.'});const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;if(!profile||!ratingAllowed(row.content_rating,profile.maxRating,profile.role==='admin'))return res.status(403).json({error:'Dit profiel mag deze media niet afspelen.'});const capabilities=deviceCapabilities(req.playbackDevice!.id);if(!capabilities)return res.status(403).json({error:'Apparaatprofiel ontbreekt.'});const base=lanPlaybackBaseUrl();if(!base)return res.status(409).json({error:'De priv\u00e9-LAN-streamserver is niet actief. Start ThuisHub opnieuw nadat je thuisnetwerkstreaming hebt ingesteld.'});const decision=decisionEngine({media:mediaCapabilitiesFromRow(row),device:capabilities,quality:(req.body?.quality||'auto') as QualityId,availableBandwidthMbps:Number(req.body?.availableBandwidthMbps)||undefined,network:'lan'});const resource=decision.mode==='direct_play'?'file':'hls';const token=createPlaybackToken({mediaId,resource,userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id,options:{copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight,targetAudioChannels:decision.targetAudioChannels}},resource==='file'?600:3600);const subtitle=row.subtitle_path?createPlaybackToken({mediaId,resource:'subtitle',userId:req.playbackDevice!.userId,deviceId:req.playbackDevice!.id},3600):'';res.json({decision,technical:mediaCapabilitiesFromRow(row),urls:{playback:`${base}/api/playback/${mediaId}/${resource==='file'?'file':'hls/index.m3u8'}?token=${encodeURIComponent(token)}`,subtitle:subtitle?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitle)}`:''}})});
 apiRouter.put('/device/media/:id/progress',requireDevice,async(req,res)=>{
   const position=Math.max(0,Number(req.body?.position)||0);const duration=Math.max(0,Number(req.body?.duration)||0);const sessionId=String(req.body?.sessionId||'');
   if(sessionId){
@@ -115,9 +116,9 @@ function playbackTarget(deviceId:string,userId:number){
   return{device,protocol:device.protocol,capabilities:device.capabilities,needsLan:device.protocol!=='local-browser'};
 }
 
-function playbackUrls(base:string,mediaId:number,sessionId:string,decision:any,hasSubtitle:boolean,protocol:string,filePath:string){
+function playbackUrls(base:string,mediaId:number,sessionId:string,decision:any,hasSubtitle:boolean,protocol:string,filePath:string,startPosition=0){
   const resource=decision.mode==='direct_play'?'file':protocol==='dlna-upnp'?'dlna':'hls';
-  const options={copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight};
+  const options={copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight,targetAudioChannels:decision.targetAudioChannels,startPosition};
   const playback=createPlaybackGrant({sessionId,resource,options},600);
   const subtitle=hasSubtitle?createPlaybackGrant({sessionId,resource:'subtitle'},600):'';
   const artwork=createPlaybackGrant({sessionId,resource:'artwork'},600);
@@ -191,7 +192,7 @@ async function beginPlaybackOnDevice(input:{userId:number;admin:boolean;maxConte
     else if(!getPlaybackSession(session.id,input.userId)?.endedAt)stopPlaybackSession({id:session.id,userId:input.userId,reason});
   };
   let urls:ReturnType<typeof playbackUrls>;
-  try{urls=playbackUrls(base,input.mediaId,session.id,decision,Boolean(row.subtitle_path),target.protocol,row.file_path)}
+  try{urls=playbackUrls(base,input.mediaId,session.id,decision,Boolean(row.subtitle_path),target.protocol,row.file_path,session.position)}
   catch(error){await failNewSession('load-failed');throw error}
   if((target.protocol==='thuishub-tv-app'||target.protocol==='android-tv'||target.protocol==='samsung-tizen')&&input.dispatchLoad!==false){
     try{dispatchDeviceCommand(input.deviceId,'load',{sessionId:session.id,mediaId:input.mediaId,title:row.title,position:session.position,urls,decision})}
@@ -207,7 +208,8 @@ async function beginPlaybackOnDevice(input:{userId:number;admin:boolean;maxConte
       session=started.session;
     }catch(error){throw Object.assign(new Error(`De DLNA-tv kon het afspelen niet starten: ${error instanceof Error?error.message:String(error)}`),{status:502})}
   }
-  return{...sessionPresentation(session,row,target,urls),decision,technical:{...mediaCapabilitiesFromRow(row),fileSize:row.size,duration:row.duration},device:target.device||{id:input.deviceId,name:target.protocol==='google-cast'?'Google Cast':'Deze browser',protocol:target.protocol}};
+  const acceleration=decision.copyVideo?null:videoTranscodePlan(row.color_transfer,decision.targetWidth||1920,Boolean(decision.burnSubtitles));
+  return{...sessionPresentation(session,row,target,urls),decision,technical:{...mediaCapabilitiesFromRow(row),fileSize:row.size,duration:row.duration,hardwareDecodeActive:Boolean(acceleration?.hardwareDecode),hardwareEncodeActive:Boolean(acceleration?.hardwareEncode)},device:target.device||{id:input.deviceId,name:target.protocol==='google-cast'?'Google Cast':'Deze browser',protocol:target.protocol}};
 }
 
 apiRouter.get('/bootstrap', (req, res) => {
@@ -382,11 +384,12 @@ apiRouter.post('/playback-sessions/:id/control',async(req,res,next)=>{try{
   }
   let session=controlPlaybackSession({id:current.id,userId:req.user!.id,revision,action:action as any,position:req.body?.position,duration:req.body?.duration,controllerId:req.body?.controllerId,reason:req.body?.reason,metadata:browserCommand?{...current.metadata,browserCommand}:undefined});
   if(action==='play')session=await finalizePlaybackTransfer(session);
+  if(action==='stop'||action==='error')releaseHls(current.mediaId);
   broadcastPlaybackSession(session);
   res.json({session:{...session,...sessionControlPresentation(session)}});
 }catch(error){next(error)}});
 apiRouter.post('/playback-sessions/:id/renew',(req,res,next)=>{try{const session=getPlaybackSession(String(req.params.id),req.user!.id);if(!session||session.endedAt)return res.status(404).json({error:'Actieve afspeelsessie niet gevonden.'});const token=String(req.body?.token||'');if(!token)return res.status(400).json({error:'De huidige afspeelgrant ontbreekt.'});res.json({token:renewPlaybackGrant(token,session.id,req.user!.id,Number(req.body?.ttlSeconds)||600)})}catch(error){next(error)}});
-apiRouter.delete('/playback-sessions/:id',async(req,res,next)=>{try{const current=getPlaybackSession(String(req.params.id),req.user!.id);if(!current)return res.status(404).json({error:'Afspeelsessie niet gevonden.'});if(current.endedAt){const activeSession=getActivePlaybackSession(req.user!.id);broadcastPlaybackSession(activeSession);return res.json({session:current,activeSession})}const reason=String(req.body?.reason||'transfer-cancelled');if(isPendingPlaybackTransfer(current)){const rolledBack=await abortPlaybackTransfer(current,reason);if(reason==='disconnect'||reason==='stop'){let stoppedSource=rolledBack.activeSession;if(stoppedSource&&!stoppedSource.endedAt){await stopPlaybackReceiver(stoppedSource,reason);stoppedSource=stopPlaybackSession({id:stoppedSource.id,userId:req.user!.id,revision:stoppedSource.revision,position:stoppedSource.position,duration:stoppedSource.duration,reason})}broadcastPlaybackSession(null);return res.json({session:rolledBack.session,activeSession:null,sourceSession:stoppedSource,rolledBack:true})}broadcastPlaybackSession(rolledBack.activeSession);return res.json({session:rolledBack.session,activeSession:rolledBack.activeSession,rolledBack:true})}if(current.protocol==='dlna-upnp')await dlnaController(current.deviceId).stop().catch(()=>undefined);else if(current.protocol!=='google-cast'&&current.protocol!=='local-browser')dispatchDeviceCommand(current.deviceId,'stop',{sessionId:current.id});const session=stopPlaybackSession({id:current.id,userId:req.user!.id,revision:req.body?.revision===undefined?undefined:Number(req.body.revision),position:req.body?.position,duration:req.body?.duration,reason:reason==='transfer-cancelled'?'disconnect':reason});broadcastPlaybackSession(session);res.json({session})}catch(error){next(error)}});
+apiRouter.delete('/playback-sessions/:id',async(req,res,next)=>{try{const current=getPlaybackSession(String(req.params.id),req.user!.id);if(!current)return res.status(404).json({error:'Afspeelsessie niet gevonden.'});if(current.endedAt){const activeSession=getActivePlaybackSession(req.user!.id);broadcastPlaybackSession(activeSession);return res.json({session:current,activeSession})}const reason=String(req.body?.reason||'transfer-cancelled');if(isPendingPlaybackTransfer(current)){const rolledBack=await abortPlaybackTransfer(current,reason);if(reason==='disconnect'||reason==='stop'){let stoppedSource=rolledBack.activeSession;if(stoppedSource&&!stoppedSource.endedAt){await stopPlaybackReceiver(stoppedSource,reason);releaseHls(stoppedSource.mediaId);stoppedSource=stopPlaybackSession({id:stoppedSource.id,userId:req.user!.id,revision:stoppedSource.revision,position:stoppedSource.position,duration:stoppedSource.duration,reason})}broadcastPlaybackSession(null);return res.json({session:rolledBack.session,activeSession:null,sourceSession:stoppedSource,rolledBack:true})}broadcastPlaybackSession(rolledBack.activeSession);return res.json({session:rolledBack.session,activeSession:rolledBack.activeSession,rolledBack:true})}if(current.protocol==='dlna-upnp')await dlnaController(current.deviceId).stop().catch(()=>undefined);else if(current.protocol!=='google-cast'&&current.protocol!=='local-browser')dispatchDeviceCommand(current.deviceId,'stop',{sessionId:current.id});const session=stopPlaybackSession({id:current.id,userId:req.user!.id,revision:req.body?.revision===undefined?undefined:Number(req.body.revision),position:req.body?.position,duration:req.body?.duration,reason:reason==='transfer-cancelled'?'disconnect':reason});releaseHls(current.mediaId);broadcastPlaybackSession(session);res.json({session})}catch(error){next(error)}});
 apiRouter.post('/playback/:id/decision',async(req,res,next)=>{try{
   const mediaId=Number(req.params.id);const row=db.prepare('SELECT * FROM media_items WHERE id=?').get(mediaId) as any;
   if(!row)return res.status(404).json({error:'Media niet gevonden.'});
@@ -404,7 +407,7 @@ apiRouter.post('/playback/:id/decision',async(req,res,next)=>{try{
   if(needsLan&&!lanBase)return res.status(409).json({error:'De priv\u00e9-LAN-streamserver is niet actief. Kies een geldig LAN-adres, schakel thuisnetwerkstreaming in en start ThuisHub opnieuw.',localStreamingRequired:true});
   const base=lanBase||`${req.protocol}://${req.get('host')}`;
   const fileToken=createPlaybackToken({mediaId,resource:'file',userId:req.user!.id,deviceId:requestedDeviceId||undefined},600);
-  const hlsToken=createPlaybackToken({mediaId,resource:'hls',userId:req.user!.id,deviceId:requestedDeviceId||undefined,options:{copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight}},3600);
+  const hlsToken=createPlaybackToken({mediaId,resource:'hls',userId:req.user!.id,deviceId:requestedDeviceId||undefined,options:{copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight,targetAudioChannels:decision.targetAudioChannels}},3600);
   const subtitleToken=row.subtitle_path?createPlaybackToken({mediaId,resource:'subtitle',userId:req.user!.id,deviceId:requestedDeviceId||undefined},3600):'';
   res.json({decision,technical:{...mediaCapabilitiesFromRow(row),fileSize:row.size,duration:row.duration},urls:{playback:decision.mode==='direct_play'?`${base}/api/playback/${mediaId}/file?token=${encodeURIComponent(fileToken)}`:`${base}/api/playback/${mediaId}/hls/index.m3u8?token=${encodeURIComponent(hlsToken)}`,subtitle:subtitleToken?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitleToken)}`:'',expiresInSeconds:decision.mode==='direct_play'?600:3600},device:capabilities,localStreamingRequired:false});
 }catch(error){next(error)}});
@@ -633,7 +636,7 @@ apiRouter.get('/dashboard', requireAdmin, async (_req,res)=>{
   const backups=listBackups();
   const lastUpdate=JSON.parse(getSetting('lastUpdateResult','{}')||'{}');
   const system=await systemMetrics();
-  res.json({version:APP_VERSION,name:APP_NAME,uptimeSeconds:Math.round(process.uptime()),serverStatus:'online',database:{...integrity,file:appPaths.databaseFile},lastBackup:backups[0]||null,update:lastUpdate,tailscale,stats,counts,libraryCounts,metadata:metadataDashboard(),activity:listActivity(),gpus:detectedGpus(),encoder:videoEncoder(),recent,optimizations:optimizationList(),storage:{libraryBytes:(stats as any).bytes,dataBytes:directorySize(appPaths.dataDir),logBytes:logStorageBytes(),disk:system.disk},system,warnings:[...(!integrity.ok?['De database-integriteitscontrole meldt een probleem.']:[]),...(!tailscale.serveActive?['Externe toegang via Tailscale Serve is niet actief.']:[]),...(backups.length===0?['Er is nog geen back-up gemaakt.']:[])]});
+  res.json({version:APP_VERSION,name:APP_NAME,uptimeSeconds:Math.round(process.uptime()),serverStatus:'online',database:{...integrity,file:appPaths.databaseFile},lastBackup:backups[0]||null,update:lastUpdate,tailscale,externalAccess:externalAccessStatus(),stats,counts,libraryCounts,metadata:metadataDashboard(),activity:listActivity(),gpus:detectedGpus(),encoder:videoEncoder(),recent,optimizations:optimizationList(),storage:{libraryBytes:(stats as any).bytes,dataBytes:directorySize(appPaths.dataDir),logBytes:logStorageBytes(),disk:system.disk},system,warnings:[...(!integrity.ok?['De database-integriteitscontrole meldt een probleem.']:[]),...(getSetting('externalAccessMode','home')==='tailscale'&&!tailscale.serveActive?['Externe toegang via Tailscale Serve is niet actief.']:[]),...(backups.length===0?['Er is nog geen back-up gemaakt.']:[])]});
 });
 
 function directorySize(directory:string):number{if(!fs.existsSync(directory))return 0;let total=0;for(const entry of fs.readdirSync(directory,{withFileTypes:true})){const file=path.join(directory,entry.name);try{total+=entry.isDirectory()?directorySize(file):fs.statSync(file).size}catch{}}return total}
@@ -656,6 +659,7 @@ apiRouter.delete('/logs', requireAdmin, (_req,res)=>{clearLogs();res.status(204)
 apiRouter.post('/logs/open-folder', requireAdmin, (_req,res)=>{if(process.platform==='win32')execFile('explorer.exe',[appPaths.logsDir],{windowsHide:false});res.status(204).end()});
 
 apiRouter.get('/tailscale', requireAdmin, async(_req,res)=>res.json(await tailscaleStatus()));
+apiRouter.get('/external-access', requireAdmin, async(_req,res)=>res.json({ router:externalAccessStatus(), listener:externalStreamingStatus(), tailscale:await tailscaleStatus() }));
 apiRouter.get('/updates', requireAdmin, (_req,res)=>res.json({currentVersion:APP_VERSION,channel:getSetting('updateChannel','stable'),automatic:true,source:'GitHub Releases: kratje050/thuishub',lastCheckAt:getSetting('lastUpdateCheckAt',''),lastResult:JSON.parse(getSetting('lastUpdateResult','{}')||'{}'),downloaded:downloadedUpdateStatus(),downloadProgress:updateDownloadStatus()}));
 apiRouter.get('/updates/download/status',requireAdmin,(_req,res)=>res.json(updateDownloadStatus()));
 apiRouter.post('/updates/check', requireAdmin, async(_req,res)=>res.json(await checkForUpdates()));
@@ -743,8 +747,10 @@ apiRouter.get('/folders', requireAdmin, async (req, res) => {
 apiRouter.get('/settings', requireAdmin, (_req, res) => res.json(publicSettings()));
 apiRouter.patch('/settings', requireAdmin, async (req, res, next) => {
   try {
-    const { serverName, language, autoplay, rewindOnResume, skipIntro, skipCredits, hardwareTranscoding, toneMapping, maxTranscodes, uploadLimitMbps, automaticBackups, backupRetention, backupLocation, automaticUpdateCheck, updateChannel, developmentUpdatesEnabled, maxLogStorageMb,localStreamingEnabled,localStreamingAddress,localStreamingPort,automaticDeviceDiscovery,dlnaDiscoveryEnabled,deviceRetentionDays,castReceiverAppId,defaultQualityLan,defaultQualityTailscale,defaultQualityMobile,defaultQualityDownload,defaultQualityLiveTv,metadataCacheDays,omdbLocalDailyLimit,metadataStrategy } = req.body || {};
+    const { serverName, language, autoplay, rewindOnResume, skipIntro, skipCredits, hardwareTranscoding, toneMapping, maxTranscodes, uploadLimitMbps, automaticBackups, backupRetention, backupLocation, automaticUpdateCheck, updateChannel, developmentUpdatesEnabled, maxLogStorageMb,localStreamingEnabled,localStreamingAddress,localStreamingPort,externalAccessMode,externalAccessPort,externalAccessConsent,automaticDeviceDiscovery,dlnaDiscoveryEnabled,deviceRetentionDays,castReceiverAppId,defaultQualityLan,defaultQualityTailscale,defaultQualityMobile,defaultQualityDownload,defaultQualityLiveTv,metadataCacheDays,omdbLocalDailyLimit,metadataStrategy } = req.body || {};
     if(localStreamingPort!==undefined&&!isValidLanStreamingPort(localStreamingPort,Number(process.env.PORT||APP_PORT)))return res.status(400).json({error:'Kies een streamingpoort tussen 1024 en 65535 die niet gelijk is aan de beheerpoort.'});
+    if(externalAccessPort!==undefined&&(!isValidLanStreamingPort(externalAccessPort,Number(process.env.PORT||APP_PORT))||Number(externalAccessPort)===Number(localStreamingPort??getSetting('localStreamingPort','8788'))))return res.status(400).json({error:'Kies een aparte externe poort tussen 1024 en 65535.'});
+    if(externalAccessMode==='router'&&getSetting('externalAccessMode','home')!=='router'&&externalAccessConsent!==true)return res.status(400).json({error:'Geef eerst expliciet toestemming om een routerpoort te openen.'});
     if (typeof serverName === 'string' && serverName.trim()) setSetting('serverName', serverName.trim());
     if (typeof language === 'string' && /^[a-z]{2}-[A-Z]{2}$/.test(language)) setSetting('language', language);
     if(metadataCacheDays!==undefined)setSetting('metadataCacheDays',String(Math.min(365,Math.max(1,Number(metadataCacheDays)||14))));
@@ -768,11 +774,19 @@ apiRouter.patch('/settings', requireAdmin, async (req, res, next) => {
     if(typeof localStreamingEnabled==='boolean')setSetting('localStreamingEnabled',String(localStreamingEnabled));
     if(typeof localStreamingAddress==='string'&&(!localStreamingAddress||/^(?:10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)\d{1,3}\.\d{1,3}$/.test(localStreamingAddress)))setSetting('localStreamingAddress',localStreamingAddress);
     if(localStreamingPort!==undefined)setSetting('localStreamingPort',String(Number(localStreamingPort)));
+    if(['home','router','tailscale'].includes(externalAccessMode))setSetting('externalAccessMode',externalAccessMode);
+    if(externalAccessPort!==undefined)setSetting('externalAccessPort',String(Number(externalAccessPort)));
     if(typeof automaticDeviceDiscovery==='boolean')setSetting('automaticDeviceDiscovery',String(automaticDeviceDiscovery));
     if(typeof dlnaDiscoveryEnabled==='boolean')setSetting('dlnaDiscoveryEnabled',String(dlnaDiscoveryEnabled));
     if(deviceRetentionDays!==undefined)setSetting('deviceRetentionDays',String(Math.min(365,Math.max(1,Number(deviceRetentionDays)||30))));
     if(typeof castReceiverAppId==='string'&&/^[A-F0-9]{0,16}$/i.test(castReceiverAppId))setSetting('castReceiverAppId',castReceiverAppId);
     const qualityValues=QUALITY_PROFILES.map(item=>item.id);for(const[key,value]of Object.entries({defaultQualityLan,defaultQualityTailscale,defaultQualityMobile,defaultQualityDownload,defaultQualityLiveTv}))if(qualityValues.includes(value as any))setSetting(key,String(value));
+    if(externalAccessMode!==undefined||externalAccessPort!==undefined){
+      const mode=getSetting('externalAccessMode','home');
+      if(mode!=='router')await refreshExternalAccessMapping();
+      await reconfigureExternalStreamingServer();
+      if(mode==='router')await refreshExternalAccessMapping();
+    }
     res.json(publicSettings());
   } catch(error) { next(error); }
 });

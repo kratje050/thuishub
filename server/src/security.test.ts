@@ -25,6 +25,14 @@ describe('privé-LAN-beperking',()=>{
     expect(allowed('POST','/api/devices/pair/approve')).toBe(false);
     expect(allowed('PATCH','/api/settings')).toBe(false);
   });
+  it('stelt via de routerpoort nooit beheer, instellingen of het dashboard beschikbaar',()=>{
+    const allowed=network.networkInternals.allowedExternalRequest;
+    expect(allowed('GET','/api/playback/12/hls/index.m3u8')).toBe(true);
+    expect(allowed('GET','/api/device/library')).toBe(true);
+    expect(allowed('GET','/api/dashboard')).toBe(false);
+    expect(allowed('PATCH','/api/settings')).toBe(false);
+    expect(allowed('GET','/')).toBe(false);
+  });
   it('controleert adressen met het netmasker van de gekozen interface',()=>{
     expect(network.sameIpv4Subnet('192.168.1.20','192.168.1.200','255.255.255.0')).toBe(true);
     expect(network.sameIpv4Subnet('192.168.2.20','192.168.1.200','255.255.255.0')).toBe(false);

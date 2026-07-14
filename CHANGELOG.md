@@ -1,5 +1,13 @@
 # Wijzigingen
 
+## 1.2.15 — 14 juli 2026
+
+- Hervatten en HLS-transcoding beginnen direct op de gevraagde positie en wachten alleen op het eerste bruikbare segment.
+- Audio-only transcoding kopieert de video en beperkt het geluid tot de werkelijk ondersteunde kanaalindeling.
+- Gestopte of vervangen sessies beëindigen FFmpeg direct en laten geen dubbele transcodes doorlopen.
+- NVIDIA hardwaredecode, hardware-encode en tijd tot eerste beeld zijn zichtbaar in Technische informatie.
+- Externe toegang kan zonder verplichte Tailscale via een aparte, beperkte UPnP- of NAT-PMP-routerpoort worden ingeschakeld.
+
 ## 1.2.14 — 14 juli 2026
 
 - Android herkent varianten van de ThuisHub-mDNS-servicenaam voortaan correct.

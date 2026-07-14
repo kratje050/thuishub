@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { dataDir } from './db.js';
-import { ffmpegPath, videoEncoder, videoFilter } from './ffmpeg.js';
+import { ffmpegPath, videoEncoder, videoFilter, videoTranscodePlan } from './ffmpeg.js';
 import { log } from './logger.js';
 
 const hlsRoot = path.join(dataDir, 'hls');
@@ -13,9 +13,10 @@ fs.rmSync(hlsRoot, { recursive: true, force: true });
 fs.mkdirSync(hlsRoot, { recursive: true });
 const active = new Map<number, ChildProcessWithoutNullStreams>();
 const activeProfiles = new Map<number, string>();
-const HLS_SEGMENT_SECONDS = 1;
+const HLS_FIRST_SEGMENT_SECONDS = 1;
+const HLS_SEGMENT_SECONDS = 3;
 
-export type HlsOptions = { copyVideo?: boolean; copyAudio?: boolean; burnSubtitles?: boolean; subtitlePath?: string | null; targetBitrateMbps?: number; targetWidth?: number; targetHeight?: number };
+export type HlsOptions = { copyVideo?: boolean; copyAudio?: boolean; burnSubtitles?: boolean; subtitlePath?: string | null; targetBitrateMbps?: number; targetWidth?: number; targetHeight?: number; targetAudioChannels?: number; startPosition?: number };
 
 function subtitleFilterPath(value: string) {
   return value.replaceAll('\\', '/').replaceAll(':', '\\:').replaceAll("'", "\\'").replaceAll('[', '\\[').replaceAll(']', '\\]');
@@ -24,8 +25,13 @@ function subtitleFilterPath(value: string) {
 function hlsKeyframeArgs(codec: string) {
   return [
     ...(codec === 'h264_nvenc' ? ['-forced-idr', '1'] : []),
-    '-force_key_frames', `expr:gte(t,n_forced*${HLS_SEGMENT_SECONDS})`,
+    '-force_key_frames', `expr:gte(t,n_forced*${HLS_FIRST_SEGMENT_SECONDS})`,
   ];
+}
+
+function inputSeekArgs(value: unknown) {
+  const seconds = Math.min(7 * 24 * 3600, Math.max(0, Number(value) || 0));
+  return seconds > 0 ? ['-ss', seconds.toFixed(3)] : [];
 }
 
 export function isDirectPlayable(item: { file_path: string; video_codec?: string | null; audio_codec?: string | null }) {
@@ -50,19 +56,24 @@ export async function ensureHls(id: number, filePath: string, colorTransfer?: st
     fs.rmSync(dir, { recursive: true, force: true });
     fs.mkdirSync(dir, { recursive: true });
     const encoder = videoEncoder();
-    const baseVideoFilter = videoFilter(colorTransfer,options.targetWidth||1920);
+    const pipeline = videoTranscodePlan(colorTransfer, options.targetWidth || 1920, Boolean(options.burnSubtitles));
+    const baseVideoFilter = options.copyVideo ? videoFilter(colorTransfer,options.targetWidth||1920) : pipeline.filter;
     const completeVideoFilter = options.burnSubtitles
       ? `subtitles=filename='${subtitleFilterPath(options.subtitlePath || filePath)}',${baseVideoFilter}`
       : baseVideoFilter;
-    const videoArgs = options.copyVideo ? ['-c:v', 'copy'] : ['-c:v', encoder.codec, ...encoder.args,
+    const videoArgs = options.copyVideo ? ['-c:v', 'copy'] : ['-c:v', pipeline.encoder.codec, ...pipeline.encoder.args,
       '-vf', completeVideoFilter,...(options.targetBitrateMbps?['-maxrate',`${options.targetBitrateMbps}M`,'-bufsize',`${Math.max(2,options.targetBitrateMbps*2)}M`]:[])];
-    const audioArgs = options.copyAudio ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '384k', '-ac', '6'];
+    const audioChannels = Math.min(8, Math.max(1, Number(options.targetAudioChannels) || 2));
+    const audioArgs = options.copyAudio ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', audioChannels <= 2 ? '192k' : '384k', '-ac', String(audioChannels)];
     const args = [
-      '-hide_banner', '-loglevel', 'warning', '-i', filePath,
+      '-hide_banner', '-loglevel', 'warning',
+      ...(!options.copyVideo ? pipeline.inputArgs : []),
+      ...inputSeekArgs(options.startPosition),
+      '-i', filePath,
       '-map', '0:v:0', '-map', '0:a:0?', '-sn',
       ...videoArgs,...audioArgs,
       ...(options.copyVideo ? [] : hlsKeyframeArgs(encoder.codec)),
-      '-f', 'hls', '-hls_time', String(HLS_SEGMENT_SECONDS), '-hls_list_size', '0', '-hls_playlist_type', 'event',
+      '-f', 'hls', '-hls_init_time', String(HLS_FIRST_SEGMENT_SECONDS), '-hls_time', String(HLS_SEGMENT_SECONDS), '-hls_list_size', '0', '-hls_playlist_type', 'event',
       '-hls_flags', 'independent_segments+temp_file', '-hls_segment_filename', path.join(dir, 'segment-%05d.ts'), manifest
     ];
     activeProfiles.set(id,profile);
@@ -78,7 +89,10 @@ export async function ensureHls(id: number, filePath: string, colorTransfer?: st
   }
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    if (fs.existsSync(manifest)) return manifest;
+    if (fs.existsSync(manifest)) {
+      const firstSegment = fs.readFileSync(manifest, 'utf8').split(/\r?\n/).find(line => line && !line.startsWith('#'));
+      if (firstSegment && fs.existsSync(path.join(dir, firstSegment.trim()))) return manifest;
+    }
     if (!active.has(id)) throw new Error('FFmpeg kon deze video niet omzetten.');
     await new Promise(resolve => setTimeout(resolve, 150));
   }
@@ -110,10 +124,9 @@ export function dlnaMpegTsArgs(filePath: string, colorTransfer?: string | null, 
   // Het generieke DLNA-profiel is bewust stereo. Dit voorkomt dat televisies
   // een verder geldige MPEG-TS-stream weigeren vanwege 5.1 AAC.
   const audioArgs = options.copyAudio ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '192k', '-ac', '2'];
-  const safeStart = Math.min(7 * 24 * 3_600, Math.max(0, Number.isFinite(startSeconds) ? startSeconds : 0));
   return [
     '-hide_banner', '-loglevel', 'warning',
-    ...(safeStart > 0 ? ['-ss', safeStart.toFixed(3)] : []),
+    ...inputSeekArgs(startSeconds),
     '-i', filePath,
     '-map', '0:v:0', '-map', '0:a:0?', '-sn',
     ...videoArgs, ...audioArgs,
@@ -137,7 +150,7 @@ export function clearTranscodes() {
   activeProfiles.clear();
 }
 
-export const transcodeInternals = { HLS_SEGMENT_SECONDS, hlsKeyframeArgs };
+export const transcodeInternals = { HLS_FIRST_SEGMENT_SECONDS, HLS_SEGMENT_SECONDS, hlsKeyframeArgs, inputSeekArgs };
 
 declare module 'node:child_process' {
   interface ChildProcessWithoutNullStreams { stderrLog?: string }

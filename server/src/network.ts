@@ -8,6 +8,10 @@ import { APP_PORT } from './constants.js';
 let activeLanServer: Server | null = null;
 let activeLanAddress = '';
 let activeLanPort = 0;
+let activeExternalServer: Server | null = null;
+let activeExternalAddress = '';
+let activeExternalPort = 0;
+let externalApp: Express | null = null;
 
 export function isPrivateIpv4(value: string) {
   const parts = value.split('.').map(Number);
@@ -69,6 +73,11 @@ function allowedLanRequest(method: string, requestPath: string) {
   return routeRules.some(([pattern, methods]) => pattern.test(requestPath) && methods.includes(method.toUpperCase()));
 }
 
+// De routerpoort gebruikt dezelfde streng beperkte media/device-API als de
+// LAN-poort. Beheer, instellingen, gebruikers en het dashboard vallen hier
+// nadrukkelijk niet onder.
+const allowedExternalRequest = allowedLanRequest;
+
 function normalizedSocketAddress(value: string | undefined) {
   return String(value || '').replace(/^::ffff:/, '');
 }
@@ -86,10 +95,59 @@ export function restrictLanListener(req: Request, res: Response, next: NextFunct
   // Base the trust boundary on the listener that is actually running. Settings
   // can change before the required restart and must never make this listener
   // fall through to the unrestricted management application.
+  if (activeExternalServer?.listening && isLanListenerEndpoint(req.socket.localAddress, req.socket.localPort, activeExternalAddress, activeExternalPort)) {
+    if (allowedExternalRequest(req.method, req.path)) return next();
+    return res.status(403).json({ error: 'De externe poort geeft uitsluitend beperkte afspeel- en apparaat toegang.' });
+  }
   if (!activeLanServer?.listening || !isLanListenerEndpoint(req.socket.localAddress, req.socket.localPort, activeLanAddress, activeLanPort)) return next();
   if (!isLanClientAllowed(req.socket.remoteAddress, activeLanAddress)) return res.status(403).json({ error: 'Deze streamingpoort is alleen bereikbaar vanaf hetzelfde priv\u00e9-thuisnetwerk.' });
   if (allowedLanRequest(req.method, req.path)) return next();
   res.status(403).json({ error: 'De lokale streamingpoort geeft uitsluitend beperkte afspeeltoegang.' });
+}
+
+export function externalStreamingStatus() {
+  const address = getSetting('localStreamingAddress', '');
+  const port = Number(getSetting('externalAccessPort', '8790'));
+  return {
+    enabled: getSetting('externalAccessMode', 'home') === 'router',
+    address,
+    port,
+    listening: Boolean(activeExternalServer?.listening && activeExternalAddress === address && activeExternalPort === port),
+  };
+}
+
+export function startExternalStreamingServer(app: Express): Server | null {
+  externalApp = app;
+  if (getSetting('externalAccessMode', 'home') !== 'router') return null;
+  const address = getSetting('localStreamingAddress', '');
+  const port = Number(getSetting('externalAccessPort', '8790'));
+  if (!isValidLanStreamingPort(port) || !isPrivateIpv4(address) || !assignedPrivateAddresses().includes(address)) {
+    log('ERROR', 'streaming', 'Externe streamingpoort kon niet starten: controleer het LAN-adres en de aparte externe poort.', { address, port });
+    return null;
+  }
+  const server = app.listen(port, address, () => log('INFO', 'streaming', 'Beperkte externe streamingpoort gestart.', { address, port }));
+  activeExternalServer = server; activeExternalAddress = address; activeExternalPort = port;
+  const clear = () => { if (activeExternalServer === server) { activeExternalServer = null; activeExternalAddress = ''; activeExternalPort = 0; } };
+  server.on('error', error => { clear(); log('ERROR', 'streaming', 'Externe streamingpoort kon niet luisteren.', { address, port, error: error.message }); });
+  server.on('close', clear);
+  return server;
+}
+
+export async function reconfigureExternalStreamingServer() {
+  const desired = externalStreamingStatus();
+  if (activeExternalServer?.listening && (!desired.enabled || activeExternalAddress !== desired.address || activeExternalPort !== desired.port)) {
+    const server = activeExternalServer;
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+  if (!desired.enabled || activeExternalServer?.listening || !externalApp) return externalStreamingStatus();
+  const server = startExternalStreamingServer(externalApp);
+  if (!server) return externalStreamingStatus();
+  await new Promise<void>(resolve => {
+    if (server.listening) return resolve();
+    server.once('listening', () => resolve());
+    server.once('error', () => resolve());
+  });
+  return externalStreamingStatus();
 }
 
 export function lanStreamingStatus() {
@@ -142,4 +200,4 @@ export function startLanStreamingServer(app: Express): Server | null {
   return server;
 }
 
-export const networkInternals = { allowedLanRequest, ipv4Number };
+export const networkInternals = { allowedLanRequest, allowedExternalRequest, ipv4Number };

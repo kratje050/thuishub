@@ -65,6 +65,11 @@ describe('centrale playback decision engine',()=>{
     expect(Object.fromEntries(QUALITY_PROFILES.filter(item=>item.maxBitrateMbps).map(item=>[item.id,item.maxBitrateMbps]))).toMatchObject({'4k-max':80,'4k-high':40,'4k-balanced':25,'1080p-max':20,'1080p-high':12,'1080p-balanced':8,'720p':4,'data-saver':2});
   });
 
+  it('zet bij een audio-only transcode alleen het aantal kanalen terug tot wat het apparaat ondersteunt',()=>{
+    const result=decisionEngine({media:{...media,audioChannels:6},device:{...device,maxAudioChannels:2},quality:'original'});
+    expect(result).toMatchObject({mode:'transcode',copyVideo:true,copyAudio:false,targetAudioChannels:2});
+  });
+
   it('herkent container-, HDR- en audio-eigenschappen uit probes',()=>{
     expect(containerFromPath('D:/Films/Voorbeeld.MKV')).toBe('mkv');
     expect(hdrFromProbe({color_transfer:'smpte2084'})).toBe('hdr10');
