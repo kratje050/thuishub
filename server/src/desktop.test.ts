@@ -17,7 +17,7 @@ describe('Windows-distributie', () => {
 
   it('configureert portable, installer en veilige upgrade', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
-    expect(packageJson.version).toBe('1.2.12');
+    expect(packageJson.version).toBe('1.2.13');
     expect(packageJson.build.nsis.artifactName).toContain('ThuisHub-Setup');
     expect(packageJson.build.nsis.deleteAppDataOnUninstall).toBe(false);
     expect(packageJson.build.portable.artifactName).toContain('ThuisHub-Portable');
@@ -47,10 +47,13 @@ describe('Windows-distributie', () => {
   });
 
   it('start de installer pas nadat het desktopproces is afgesloten', () => {
-    let call:any;let unref=false;
-    const result=handoff.launchInstallerAfterExit('C:\\Updates\\ThuisHub-Setup-1.3.0.exe',4321,(command:string,args:string[],options:any)=>{call={command,args,options};return{unref:()=>{unref=true}}});
-    expect(call.command).toBe('powershell.exe');expect(call.options).toMatchObject({detached:true,windowsHide:true});expect(unref).toBe(true);
+    let call:any;
+    const result=handoff.launchInstallerAfterExit('C:\\Updates\\ThuisHub-Setup-1.3.0.exe',4321,{restartExecutable:'C:\\Programs\\ThuisHub\\ThuisHub.exe',execProcess:(command:string,args:string[],options:any)=>{call={command,args,options};return'9876\n'}});
+    expect(call.command).toBe('powershell.exe');expect(call.options).toMatchObject({windowsHide:true,timeout:15000});expect(result.helperPid).toBe(9876);
+    const broker=Buffer.from(call.args.at(-1),'base64').toString('utf16le');
+    expect(broker).toContain('Invoke-CimMethod');expect(broker).toContain('Win32_Process');
     expect(result.script).toContain('Wait-Process -Id 4321');expect(result.script).toContain('ThuisHub-Setup-1.3.0.exe');
-    expect(result.script).toContain("-ArgumentList '/S','--force-run' -Wait -PassThru");
+    expect(result.script).toContain("-ArgumentList '/S','--force-run' -PassThru");
+    expect(result.script).toContain('install-helper.log');expect(result.script).toContain('C:\\Programs\\ThuisHub\\ThuisHub.exe');
   });
 });

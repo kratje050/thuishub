@@ -116,10 +116,10 @@ describe('beveiligde update-download',()=>{
     database.setSetting('lastUpdateResult',JSON.stringify({...manifest,available:true}));
     await updates.downloadUpdate(manifest,async()=>new Response(bytes));
     let call:any;let stopped=false;
-    const result=updates.requestUpdateInstall({desktop:false,shutdown:()=>{stopped=true},spawnProcess:(command,args,options)=>{call={command,args,options};return{unref(){}}}});
+    const result=updates.requestUpdateInstall({desktop:false,shutdown:()=>{stopped=true},execProcess:(command,args,options)=>{call={command,args,options};return'2468\n'}});
     const encoded=call.args.at(-1);const script=Buffer.from(encoded,'base64').toString('utf16le');
     expect(result).toMatchObject({accepted:true,mode:'browser',version:'1.3.0'});expect(stopped).toBe(true);
-    expect(script).toContain("-ArgumentList '/S','--force-run' -Wait -PassThru");
+    expect(script).toContain('Invoke-CimMethod');expect(script).toContain('Win32_Process');
   });
 
   it('controleert de installer opnieuw en weigert een wijziging na de download',async()=>{

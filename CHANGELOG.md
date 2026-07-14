@@ -1,5 +1,12 @@
 # Wijzigingen
 
+## 1.2.13 — 14 juli 2026
+
+- De Windows-updatehelper wordt buiten de ThuisHub-procesgroep gestart en blijft daardoor actief nadat de app en server zijn afgesloten.
+- De installer wordt pas gestart wanneer ThuisHub volledig weg is en de geïnstalleerde versie wordt daarna gecontroleerd.
+- ThuisHub start na een geslaagde upgrade automatisch opnieuw; wanneer de installer dat niet zelf doet, verzorgt de helper de herstart.
+- Iedere installatiestap en fout wordt opgeslagen in `install-helper.log` voor gerichte diagnose.
+
 ## 1.2.12 — 14 juli 2026
 
 - Films die moeten worden getranscodeerd starten sneller door kortere HLS-segmenten, geforceerde sleutelbeelden en het opruimen van oude tijdelijke transcodebestanden.

@@ -130,7 +130,8 @@ function watchForUpdateInstall() {
       log(`Gecontroleerde installer overgenomen voor versie ${update.version}`);
       clearInterval(updateRequestTimer);
       updateRequestTimer = undefined;
-      launchInstallerAfterExit(update.file, process.pid);
+      const helper = launchInstallerAfterExit(update.file, process.pid, { restartExecutable: process.execPath });
+      log(`Updatehelper buiten de app gestart met proces-ID ${helper.helperPid || 'onbekend'}`);
       quitting = true;
       app.quit();
     } catch (error) {

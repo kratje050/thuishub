@@ -1,11 +1,17 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn, type SpawnOptions } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { APP_VERSION } from './constants.js';
 import { getSetting, setSetting } from './db.js';
 import { log } from './logger.js';
 import { appPaths } from './paths.js';
+
+const require = createRequire(import.meta.url);
+type ExecProcessLike=(command:string,args?:readonly string[],options?:Record<string,unknown>)=>string|Buffer;
+const updateHandoff = require('../../desktop/update-handoff.cjs') as {
+  launchInstallerAfterExit:(installer:string,waitPid:number,options?:{execProcess?:ExecProcessLike;restartExecutable?:string})=>unknown;
+};
 
 export type UpdateChannel = 'stable' | 'beta' | 'development';
 export type UpdateManifest = {
@@ -115,7 +121,6 @@ export async function downloadUpdate(manifest:UpdateManifest,fetcher:typeof fetc
 }
 
 type DownloadedUpdateRecord={version:string;fileName:string;bytes:number;sha256:string;downloadedAt:string};
-type SpawnLike=(command:string,args?:readonly string[],options?:SpawnOptions)=>{unref():void};
 const installRequestFile=path.join(appPaths.updatesDir,'install-request.json');
 
 function storedJson<T>(key:string):Partial<T>{try{return JSON.parse(getSetting(key,'{}')||'{}')}catch{return{}}}
@@ -144,14 +149,7 @@ function verifiedDownloadedUpdate(){
   return{version:status.version,fileName:status.fileName,file,bytes:status.bytes!,sha256:hash};
 }
 
-function launchInstallerAfterExit(installer:string,waitPid=process.pid,spawnProcess:SpawnLike=spawn as SpawnLike){
-  const escaped=installer.replaceAll("'","''");
-  const script=`$ErrorActionPreference = 'Stop'\r\nWait-Process -Id ${waitPid} -ErrorAction SilentlyContinue\r\nStart-Sleep -Milliseconds 500\r\n$installer = Start-Process -FilePath '${escaped}' -ArgumentList '/S','--force-run' -Wait -PassThru\r\nif ($installer.ExitCode -ne 0) { exit $installer.ExitCode }\r\n`;
-  const encoded=Buffer.from(script,'utf16le').toString('base64');
-  const helper=spawnProcess('powershell.exe',['-NoProfile','-NonInteractive','-WindowStyle','Hidden','-EncodedCommand',encoded],{detached:true,stdio:'ignore',windowsHide:true});helper.unref();
-}
-
-export function requestUpdateInstall(options:{desktop?:boolean;spawnProcess?:SpawnLike;shutdown?:()=>void}={}){
+export function requestUpdateInstall(options:{desktop?:boolean;execProcess?:ExecProcessLike;shutdown?:()=>void}={}){
   if(process.platform!=='win32')throw Object.assign(new Error('Automatisch installeren wordt alleen op Windows ondersteund.'),{status:400});
   const update=verifiedDownloadedUpdate();
   const desktop=options.desktop??process.env.THUIS_HUB_DESKTOP==='true';
@@ -161,10 +159,10 @@ export function requestUpdateInstall(options:{desktop?:boolean;spawnProcess?:Spa
     log('INFO','updater','Installatieverzoek veilig overgedragen aan de Windows-app.',{version:update.version,fileName:update.fileName});
     return{accepted:true,mode:'desktop',version:update.version,message:'ThuisHub wordt afgesloten. De oude programmaversie wordt automatisch vervangen en de nieuwe versie start daarna.'};
   }
-  launchInstallerAfterExit(update.file,process.pid,options.spawnProcess);
+  updateHandoff.launchInstallerAfterExit(update.file,process.pid,{execProcess:options.execProcess});
   (options.shutdown||(()=>{const timer=setTimeout(()=>process.kill(process.pid,'SIGTERM'),1200);timer.unref()}))();
   log('INFO','updater','Installer gepland na het afsluiten van de browser-server.',{version:update.version,fileName:update.fileName});
   return{accepted:true,mode:'browser',version:update.version,message:'De server sluit af. De oude programmaversie wordt automatisch vervangen en de nieuwe versie start daarna.'};
 }
 
-export const updateInternals={compareVersions,selectRelease,manifestFromRelease,exactAsset,headers,GITHUB_API,installRequestFile,verifiedDownloadedUpdate,launchInstallerAfterExit,setDownloadInProgress:(value:boolean)=>{downloadInProgress=value;if(!value)downloadProgress={...idleDownloadProgress}}};
+export const updateInternals={compareVersions,selectRelease,manifestFromRelease,exactAsset,headers,GITHUB_API,installRequestFile,verifiedDownloadedUpdate,launchInstallerAfterExit:updateHandoff.launchInstallerAfterExit,setDownloadInProgress:(value:boolean)=>{downloadInProgress=value;if(!value)downloadProgress={...idleDownloadProgress}}};

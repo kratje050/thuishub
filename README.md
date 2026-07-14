@@ -1,10 +1,16 @@
-# ThuisHub 1.2.12
+# ThuisHub 1.2.13
 
 ThuisHub is een lokale Windows-mediaserver voor eigen films, series, muziek, foto's en Live TV/DVR. De beheerinterface blijft op `http://127.0.0.1:8787`; de Windows-app en browser gebruiken dezelfde lokale gegevens in `%APPDATA%\ThuisHub\data`.
 
 ## Metadata
 
 De ontwikkelversie gebruikt een modulaire metadata-laag: TVmaze voor series, optioneel OMDb voor films, lokale Kodi-NFO-bestanden, ingebedde bestandstags en een handmatige editor met veldlocks en herstelhistorie. API-keys blijven lokaal; externe afbeeldingen worden gecontroleerd en gecachet voordat de browser ze toont. Zie [Metadata en providers](docs/METADATA_PROVIDERS.md).
+
+## Nieuw in 1.2.13
+
+- Automatisch installeren sluit ThuisHub af zonder de updatehelper mee te beëindigen.
+- De installer vervangt de oude programmabestanden, controleert de nieuwe versie en start ThuisHub daarna opnieuw.
+- Een apart installatielogboek maakt een eventuele Windows-installerfout zichtbaar.
 
 ## Nieuw in 1.2.12
 
@@ -102,7 +108,7 @@ De softwarelogica en builds worden geautomatiseerd gecontroleerd, maar er is voo
 ## Starten
 
 - Geïnstalleerd: open **ThuisHub** via Start of de bureaubladsnelkoppeling.
-- Portable: open `release\ThuisHub-Portable-1.2.12.exe`.
+- Portable: open `release\ThuisHub-Portable-1.2.13.exe`.
 - Browser/server: dubbelklik `ThuisHub starten.cmd`.
 - Volledig afsluiten: kies **ThuisHub afsluiten** in het systeemvak.
 
@@ -139,7 +145,7 @@ npm run dist:win
 Releasegegevens maakt u na de builds met:
 
 ```powershell
-.\scripts\generate-release-metadata.ps1 -Version 1.2.12
+.\scripts\generate-release-metadata.ps1 -Version 1.2.13
 .\scripts\scan-release-secrets.ps1 -IncludeReleaseArtifacts
 ```
 
