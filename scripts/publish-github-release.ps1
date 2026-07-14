@@ -1,4 +1,4 @@
-param([string]$Version = '1.2.3', [ValidateSet('stable','beta','development')][string]$Channel = 'stable', [switch]$Publish)
+param([string]$Version = '1.2.4', [ValidateSet('stable','beta','development')][string]$Channel = 'stable', [switch]$Publish)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $release = Join-Path $root 'release'
@@ -16,6 +16,7 @@ try {
 
   $assets = @(
     (Join-Path $release "ThuisHub-Setup-$Version.exe"), (Join-Path $release "ThuisHub-Portable-$Version.exe"),
+    (Join-Path $release "ThuisHub-Android-$Version.apk"),
     (Join-Path $release "ThuisHub-Android-TV-$Version.apk"), (Join-Path $release 'SHA256SUMS.txt'),
     (Join-Path $release 'latest.json'), (Join-Path $release 'RELEASE_NOTES.md')
   )

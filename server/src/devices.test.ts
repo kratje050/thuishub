@@ -68,6 +68,13 @@ describe('opnieuw koppelen van apparaten', () => {
     expect(stored.capabilities.length).toBeLessThan(10_000);
   });
 
+  it('registreert een Android-telefoon als display en begrenst onbekende apparaattypen', () => {
+    const mobile = devices.requestPairing({ id: 'android-mobile-01', name: 'Telefoon', platform: 'android-mobile', deviceType: 'display', capabilities: BROWSER_CAPABILITIES });
+    const unknown = devices.requestPairing({ id: 'android-unknown-1', name: 'Onbekend', platform: 'android-mobile', deviceType: '<script>', capabilities: BROWSER_CAPABILITIES });
+    expect(database.db.prepare('SELECT device_type deviceType,icon FROM playback_devices WHERE id=?').get(mobile.deviceId)).toEqual({ deviceType: 'display', icon: 'computer' });
+    expect(database.db.prepare('SELECT device_type deviceType,icon FROM playback_devices WHERE id=?').get(unknown.deviceId)).toEqual({ deviceType: 'television', icon: 'tv' });
+  });
+
   it('begrenst alle pairing-identiteitsvelden voordat sleutels en rijen worden gemaakt', () => {
     const huge = 'X'.repeat(900_000);
     const result = devices.requestPairing({

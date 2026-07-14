@@ -1,6 +1,8 @@
 package nl.thuishub.tv
 
+import android.app.UiModeManager
 import android.content.Context
+import android.content.res.Configuration
 import android.media.MediaCodecList
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
@@ -44,7 +46,7 @@ import java.util.UUID
 class MainActivity : ComponentActivity() {
     companion object {
         private const val SERVICE_TYPE = "_thuishub._tcp."
-        private const val APP_VERSION = "1.2.3"
+        private const val APP_VERSION = "1.2.4"
     }
 
     private lateinit var root: FrameLayout
@@ -66,6 +68,9 @@ class MainActivity : ComponentActivity() {
     private val resolving = mutableSetOf<String>()
     private val executedCommandIds = mutableSetOf<Long>()
     private val preferences by lazy { getSharedPreferences("thuishub", MODE_PRIVATE) }
+    private val isTelevision by lazy {
+        (getSystemService(Context.UI_MODE_SERVICE) as UiModeManager).currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+    }
     private val server get() = preferences.getString("server", "")!!.trimEnd('/')
     private val token get() = preferences.getString("deviceToken", "")!!
     private val stableDeviceId: String by lazy {
@@ -89,15 +94,18 @@ class MainActivity : ComponentActivity() {
 
     private fun showPairing() {
         root.removeAllViews()
+        val horizontalPadding = dp(if (isTelevision) 48 else 20)
+        val verticalPadding = dp(if (isTelevision) 32 else 20)
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(96, 64, 96, 64)
+            setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
         }
         val title = TextView(this).apply {
             text = "ThuisHub koppelen"
-            textSize = 34f
+            textSize = if (isTelevision) 34f else 28f
             setTextColor(0xffffffff.toInt())
+            gravity = Gravity.CENTER
         }
         screenStatus = TextView(this).apply {
             text = "ThuisHub wordt automatisch op je thuisnetwerk gezocht…"
@@ -116,7 +124,8 @@ class MainActivity : ComponentActivity() {
             setText(server)
             setTextColor(0xffffffff.toInt())
             setHintTextColor(0xff80958c.toInt())
-            minWidth = 620
+            minWidth = 0
+            setSingleLine(true)
             visibility = View.GONE
         }
         val manualConnect = Button(this).apply {
@@ -148,9 +157,10 @@ class MainActivity : ComponentActivity() {
         column.addView(screenStatus)
         column.addView(pairingCode)
         column.addView(advanced)
-        column.addView(manualAddress)
-        column.addView(manualConnect)
-        root.addView(column, FrameLayout.LayoutParams(-1, -1))
+        column.addView(manualAddress, LinearLayout.LayoutParams(-1, -2))
+        column.addView(manualConnect, LinearLayout.LayoutParams(-1, -2))
+        val scroll = ScrollView(this).apply { isFillViewport = true; addView(column, ViewGroup.LayoutParams(-1, -1)) }
+        root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun updateStatus(message: String) {
@@ -308,13 +318,53 @@ class MainActivity : ComponentActivity() {
         root.removeAllViews()
         screenStatus = null
         pairingCode = null
-        val scroll = ScrollView(this)
-        val grid = GridLayout(this).apply { columnCount = 5; setPadding(40, 32, 40, 32) }
-        scroll.addView(grid)
+        val screenWidthDp = resources.configuration.screenWidthDp.coerceAtLeast(320)
+        val columns = if (isTelevision) 5 else when {
+            screenWidthDp >= 840 -> 4
+            screenWidthDp >= 600 -> 3
+            else -> 2
+        }
+        val outerPadding = dp(if (isTelevision) 20 else 12)
+        val gap = dp(if (isTelevision) 8 else 6)
+        val availableWidth = (resources.displayMetrics.widthPixels - outerPadding * 2).coerceAtLeast(dp(280))
+        val itemWidth = (availableWidth / columns).coerceAtLeast(dp(132))
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(outerPadding, outerPadding, outerPadding, outerPadding)
+        }
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        header.addView(TextView(this).apply {
+            text = "ThuisHub\n${if (isTelevision) "Android TV" else "Android"} $APP_VERSION"
+            textSize = if (isTelevision) 26f else 22f
+            setTextColor(0xffffffff.toInt())
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(Button(this).apply {
+            text = "Andere server"
+            isAllCaps = false
+            setOnClickListener {
+                preferences.edit().remove("server").remove("deviceToken").apply()
+                serverConfirmed = false
+                pairingInProgress = false
+                showPairing()
+                startDiscovery()
+            }
+        })
+        content.addView(header, LinearLayout.LayoutParams(-1, -2))
+        val libraryStatus = TextView(this).apply {
+            text = "Bibliotheek laden…"
+            textSize = 16f
+            setTextColor(0xffb8c8c0.toInt())
+            setPadding(0, dp(10), 0, dp(10))
+        }
+        content.addView(libraryStatus)
+        val grid = GridLayout(this).apply { columnCount = columns }
+        content.addView(grid, LinearLayout.LayoutParams(-1, -2))
+        val scroll = ScrollView(this).apply { addView(content) }
         root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
         lifecycleScope.launch {
             try {
                 val items = getArray("/api/device/library")
+                libraryStatus.text = if (items.length() == 0) "Je bibliotheek is nog leeg." else "${items.length()} titels"
                 for (index in 0 until items.length()) {
                     val item = items.getJSONObject(index)
                     val mediaId = item.getInt("id")
@@ -322,9 +372,15 @@ class MainActivity : ComponentActivity() {
                         text = if (item.optString("kind") == "episode") "${item.optString("seriesTitle")}\nS${item.optInt("season")} A${item.optInt("episode")}" else item.optString("title")
                         minHeight = 150
                         isFocusable = true
+                        isAllCaps = false
+                        gravity = Gravity.CENTER
                         setOnClickListener { lifecycleScope.launch { playMedia(mediaId) } }
                     }
-                    grid.addView(button, ViewGroup.LayoutParams(300, 180))
+                    grid.addView(button, GridLayout.LayoutParams().apply {
+                        width = itemWidth - gap * 2
+                        height = dp(if (isTelevision) 92 else 112)
+                        setMargins(gap, gap, gap, gap)
+                    })
                 }
             } catch (error: HttpFailure) {
                 if (error.status == 401) {
@@ -557,7 +613,8 @@ class MainActivity : ComponentActivity() {
             .put("name", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
             .put("manufacturer", android.os.Build.MANUFACTURER)
             .put("model", android.os.Build.MODEL)
-            .put("platform", "android-tv")
+            .put("platform", if (isTelevision) "android-tv" else "android-mobile")
+            .put("deviceType", if (isTelevision) "television" else "display")
             .put("appVersion", APP_VERSION)
             .put("capabilities", JSONObject()
                 .put("maxWidth", maxWidth)
@@ -591,6 +648,7 @@ class MainActivity : ComponentActivity() {
                 .put("arc", "unknown"))
     }
 
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun showToast(message: String?) = Toast.makeText(this, message ?: "Onbekende fout", Toast.LENGTH_LONG).show()
     private suspend fun getArray(path: String) = JSONArray(request(path, "GET", null, true))
     private suspend fun post(path: String, body: JSONObject) = JSONObject(request(path, "POST", body.toString(), false))

@@ -1,5 +1,14 @@
 # Wijzigingen
 
+## 1.2.4 — 14 juli 2026
+
+- De Android-client is universeel gemaakt voor telefoon, tablet, Android TV en Google TV.
+- Het APK-manifest bevat nu zowel de normale Android-launcher als de Leanback-launcher; het ThuisHub-pictogram verschijnt daardoor ook op telefoons en tablets.
+- Leanback is optioneel en de app dwingt geen liggende schermstand meer af.
+- Koppelen en de bibliotheek schalen responsief van twee kolommen op een telefoon tot vijf kolommen op een televisie.
+- Gekoppelde mobiele apparaten worden als display geregistreerd en blijven beperkt tot de bestaande apparaat- en playbackroutes.
+- De release bevat naast de compatibele Android TV-asset een duidelijk benoemde universele `ThuisHub-Android`-APK.
+
 ## 1.2.3 — 14 juli 2026
 
 - **Afspelen op apparaat** is een permanente, gegroepeerde kiezer voor de lokale browser, gekoppelde ThuisHub TV-apps, DLNA-renderers en Google Cast.

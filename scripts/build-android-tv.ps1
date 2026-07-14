@@ -16,7 +16,10 @@ finally { Pop-Location }
 $source = Join-Path $project 'app\build\outputs\apk\debug\app-debug.apk'
 if (-not (Test-Path $source)) { throw 'Het gebouwde APK-bestand is niet gevonden.' }
 $release = (New-Item -ItemType Directory -Force (Join-Path $PSScriptRoot '..\release')).FullName
-$target = Join-Path $release 'ThuisHub-Android-TV-1.2.3.apk'
+$target = Join-Path $release 'ThuisHub-Android-1.2.4.apk'
+$legacyTarget = Join-Path $release 'ThuisHub-Android-TV-1.2.4.apk'
 Copy-Item -LiteralPath $source -Destination $target -Force
-Write-Host "Android TV-ontwikkel-APK gemaakt: $target" -ForegroundColor Green
+Copy-Item -LiteralPath $source -Destination $legacyTarget -Force
+Write-Host "Universele Android-APK gemaakt: $target" -ForegroundColor Green
+Write-Host "Compatibele Android TV-asset gemaakt: $legacyTarget" -ForegroundColor Green
 Write-Host 'Deze APK is met de lokale Android-debugkey ondertekend en bedoeld voor sideloadtests, niet voor een publieke appstore-release.' -ForegroundColor Yellow

@@ -111,13 +111,15 @@ function cleanupExpiredPairings(at = nowSeconds()) {
   })();
 }
 
-export function requestPairing(input: { id?: string; name: string; manufacturer?: string; model?: string; platform: string; appVersion?: string; capabilities: DeviceCapabilities; address?: string; protocolId?: string }) {
+export function requestPairing(input: { id?: string; name: string; manufacturer?: string; model?: string; platform: string; deviceType?: string; appVersion?: string; capabilities: DeviceCapabilities; address?: string; protocolId?: string }) {
   cleanupExpiredPairings();
   const id = input.id && /^[a-zA-Z0-9_-]{8,80}$/.test(input.id) ? input.id : crypto.randomUUID();
   const name = boundedIdentity(input.name, 'TV', 100);
   const manufacturer = boundedIdentity(input.manufacturer, '', 100);
   const model = boundedIdentity(input.model, '', 100);
   const platform = boundedIdentity(input.platform, 'unknown', 50, true);
+  const deviceType = ['television', 'display', 'audio', 'computer', 'browser'].includes(String(input.deviceType)) ? String(input.deviceType) : 'television';
+  const icon = deviceType === 'audio' ? 'speaker' : deviceType === 'television' ? 'tv' : 'computer';
   const appVersion = boundedIdentity(input.appVersion, '', 30);
   const protocolId = boundedIdentity(input.protocolId, id, 200);
   const address = boundedIdentity(input.address, '', 64);
@@ -133,11 +135,11 @@ export function requestPairing(input: { id?: string; name: string; manufacturer?
   const protocol = protocolForPlatform(platform);
   const physicalKey = physicalKeyFor({ id, name, manufacturer, model, appVersion, address, protocol, protocolId });
   db.prepare(`INSERT INTO playback_devices(id,name,manufacturer,model,platform,app_version,capabilities,last_seen_at,protocol,device_type,address,online_state,protocol_id,physical_key,requires_pairing,icon)
-    VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,1,'tv') ON CONFLICT(id) DO UPDATE SET name=excluded.name,manufacturer=excluded.manufacturer,model=excluded.model,
-    platform=excluded.platform,app_version=excluded.app_version,capabilities=excluded.capabilities,last_seen_at=CURRENT_TIMESTAMP,address=excluded.address,online_state='online',protocol_id=excluded.protocol_id,physical_key=excluded.physical_key`).run(
+    VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,?,1,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,manufacturer=excluded.manufacturer,model=excluded.model,
+    platform=excluded.platform,app_version=excluded.app_version,capabilities=excluded.capabilities,last_seen_at=CURRENT_TIMESTAMP,address=excluded.address,online_state='online',protocol_id=excluded.protocol_id,physical_key=excluded.physical_key,device_type=excluded.device_type,icon=excluded.icon`).run(
       id, name, manufacturer, model,
       platform, appVersion, JSON.stringify(normalizeCapabilities(input.capabilities)),
-      protocol, 'television', address || null, 'online', protocolId, physicalKey
+      protocol, deviceType, address || null, 'online', protocolId, physicalKey, icon
     );
   db.prepare('DELETE FROM device_pairing_codes WHERE device_id=?').run(id);
   let code = '';

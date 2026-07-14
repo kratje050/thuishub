@@ -1,16 +1,17 @@
-param([string]$Version = '1.2.3', [ValidateSet('stable','beta','development')][string]$Channel = 'stable')
+param([string]$Version = '1.2.4', [ValidateSet('stable','beta','development')][string]$Channel = 'stable')
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $release = Join-Path $root 'release'
 $required = @(
   "ThuisHub-Setup-$Version.exe",
   "ThuisHub-Portable-$Version.exe",
+  "ThuisHub-Android-$Version.apk",
   "ThuisHub-Android-TV-$Version.apk",
   'RELEASE_NOTES.md'
 )
 foreach ($name in $required) { if (-not (Test-Path (Join-Path $release $name))) { throw "Vereiste release-asset ontbreekt: $name" } }
 
-$assetNames = @("ThuisHub-Setup-$Version.exe", "ThuisHub-Portable-$Version.exe", "ThuisHub-Android-TV-$Version.apk")
+$assetNames = @("ThuisHub-Setup-$Version.exe", "ThuisHub-Portable-$Version.exe", "ThuisHub-Android-$Version.apk", "ThuisHub-Android-TV-$Version.apk")
 $wgt = "ThuisHub-Samsung-TV-$Version.wgt"
 if (Test-Path (Join-Path $release $wgt)) { $assetNames += $wgt }
 $hashes = [ordered]@{}
@@ -22,6 +23,7 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $assets = [ordered]@{
   setup = [ordered]@{ name = "ThuisHub-Setup-$Version.exe"; sha256 = $hashes["ThuisHub-Setup-$Version.exe"] }
   portable = [ordered]@{ name = "ThuisHub-Portable-$Version.exe"; sha256 = $hashes["ThuisHub-Portable-$Version.exe"] }
+  android = [ordered]@{ name = "ThuisHub-Android-$Version.apk"; sha256 = $hashes["ThuisHub-Android-$Version.apk"] }
   androidTv = [ordered]@{ name = "ThuisHub-Android-TV-$Version.apk"; sha256 = $hashes["ThuisHub-Android-TV-$Version.apk"] }
 }
 if ($hashes.Contains($wgt)) { $assets.samsungTv = [ordered]@{ name = $wgt; sha256 = $hashes[$wgt] } }

@@ -1,6 +1,6 @@
-# ThuisHub functiepariteit 1.2.3
+# ThuisHub functiepariteit 1.2.4
 
-Deze tabel beschrijft de huidige lokale ontwikkelcode. De automatische tv-detectie is nog niet als nieuwe versie gepubliceerd.
+Deze tabel beschrijft ThuisHub 1.2.4.
 
 | Onderdeel | Status | Opmerking |
 |---|---|---|
@@ -12,14 +12,14 @@ Deze tabel beschrijft de huidige lokale ontwikkelcode. De automatische tv-detect
 | Centrale apparaatkiezer | Beschikbaar in ontwikkelcode | Permanente knop, gegroepeerde lijst, online-status, opnieuw zoeken, overplaatsen en verbreken. IP-adressen worden niet in de gewone kiezer getoond. |
 | Google Cast | Beschikbaar via officiële Web Sender SDK | Gebruikt de officiële Google-kiezer en standaard Default Media Receiver. Een custom receiver-App-ID staat alleen bij ontwikkelaarsopties. Echte hardwaretest blijft vereist. |
 | Automatische DLNA/UPnP-detectie | Beschikbaar | Zoekt uitsluitend lokale MediaRenderers en ondersteunt SetURI, Play, Pause, Stop, Seek, positie/status en optioneel volume. Geen router-UPnP of portforwarding. |
-| Android TV / Google TV | Test-app beschikbaar | Vindt `_thuishub._tcp.local`, koppelt met zes cijfers, gebruikt centrale sessielinks en Media3/ExoPlayer. APK/hardware-eindtest blijft vereist. |
+| Android, Android TV / Google TV | Test-app beschikbaar | Eén APK voor telefoon, tablet en tv; vindt `_thuishub._tcp.local`, koppelt met zes cijfers en gebruikt centrale sessielinks met Media3/ExoPlayer. Hardware-eindtest blijft vereist. |
 | Samsung Tizen | Appbron beschikbaar | DNS-SD waar de firmware dit ondersteunt, lokale pairing, AVPlay en WebSocket met pollingfallback. WGT en hardwaretest vereisen Tizen Studio en een certificaat. |
 | Centrale afspeelsessies | Beschikbaar | Eén server-side bron van waarheid met revisiebeveiliging, voortgang, hervatten, verplaatsen en onmiddellijke grant-intrekking bij stoppen. |
 | Tijdelijke tv-playbacklinks | Beschikbaar | Media-, ondertitel- en artworkgrants zijn media-, apparaat- en sessiegebonden, kort geldig en glijdend verlengbaar zolang de sessie actief is. |
 | Afstandsbediening | Beschikbaar per capability | Play/pause, stop, seek, volume en verbreken waar ondersteund. Volgende/vorige en kwaliteit starten gecontroleerd een nieuwe sessie; externe Cast-ondertiteling is selecteerbaar. Audiotrackkeuze en externe ondertitels in de Android/Tizen-testapps zijn nog niet aangesloten. |
 | Netwerk- en firewallbeveiliging | Beschikbaar | De beheerinterface blijft op localhost; de tv-listener bindt aan één RFC1918-adres en heeft een exacte route-allowlist. Scripts beperken regels tot profiel Privé en `LocalSubnet`. |
 | Diagnostiek | Beschikbaar | Dashboard en alleen-lezen PowerShell-script controleren listener, interface, profiel, firewall, mDNS, SSDP en MediaRenderers zonder tokens te tonen. |
-| GitHub Releases-updates | Beschikbaar | De bestaande gecontroleerde download- en installerhandoff blijft behouden; deze wijziging is nog niet gepubliceerd. |
+| GitHub Releases-updates | Beschikbaar | De bestaande gecontroleerde download- en installerhandoff blijft behouden. |
 | Metadata zonder TMDB | Beschikbaar | TVmaze, OMDb optioneel, lokale NFO, embedded tags en handmatige correctie met bronvermelding. |
 
 Niet ieder Plex-onderdeel is één-op-één aanwezig. ThuisHub bevat geen Plex-code of -merken en ontgrendelt geen betaalde diensten. Internet-tv, huurfilms en partnercontent vereisen eigen legale bronnen en rechten.

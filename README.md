@@ -1,10 +1,17 @@
-# ThuisHub 1.2.3
+# ThuisHub 1.2.4
 
 ThuisHub is een lokale Windows-mediaserver voor eigen films, series, muziek, foto's en Live TV/DVR. De beheerinterface blijft op `http://127.0.0.1:8787`; de Windows-app en browser gebruiken dezelfde lokale gegevens in `%APPDATA%\ThuisHub\data`.
 
 ## Metadata
 
 De ontwikkelversie gebruikt een modulaire metadata-laag: TVmaze voor series, optioneel OMDb voor films, lokale Kodi-NFO-bestanden, ingebedde bestandstags en een handmatige editor met veldlocks en herstelhistorie. API-keys blijven lokaal; externe afbeeldingen worden gecontroleerd en gecachet voordat de browser ze toont. Zie [Metadata en providers](docs/METADATA_PROVIDERS.md).
+
+## Nieuw in 1.2.4
+
+- De native Android-client werkt nu op telefoons, tablets, Android TV en Google TV vanuit dezelfde APK.
+- Telefoons en tablets krijgen een normaal ThuisHub-startpictogram, een portretvriendelijke koppeling en een responsieve bibliotheek met aanraakbediening.
+- De bestaande Android TV-installatie wordt door versie 1.2.4 bijgewerkt; opnieuw installeren of eerst verwijderen is niet nodig.
+- De mediaserver, database en bestanden blijven veilig op de Windows-pc. De Android-app ontdekt de beperkte lokale streamingpoort en koppelt met de bestaande zescijferige code.
 
 ## Nieuw in 1.2.3
 
@@ -44,7 +51,7 @@ De softwarelogica en builds worden geautomatiseerd gecontroleerd, maar er is voo
 ## Starten
 
 - Geïnstalleerd: open **ThuisHub** via Start of de bureaubladsnelkoppeling.
-- Portable: open `release\ThuisHub-Portable-1.2.3.exe`.
+- Portable: open `release\ThuisHub-Portable-1.2.4.exe`.
 - Browser/server: dubbelklik `ThuisHub starten.cmd`.
 - Volledig afsluiten: kies **ThuisHub afsluiten** in het systeemvak.
 
@@ -81,7 +88,7 @@ npm run dist:win
 Releasegegevens maakt u na de builds met:
 
 ```powershell
-.\scripts\generate-release-metadata.ps1 -Version 1.2.3
+.\scripts\generate-release-metadata.ps1 -Version 1.2.4
 .\scripts\scan-release-secrets.ps1 -IncludeReleaseArtifacts
 ```
 

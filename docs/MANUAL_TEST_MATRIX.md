@@ -1,6 +1,6 @@
-# Handmatige testmatrix 1.2.3
+# Handmatige testmatrix 1.2.4
 
-De onderstaande automatische tv-detectie- en castingwijzigingen zijn nog niet gepubliceerd. Geautomatiseerde tests kunnen protocolparsing, API-contracten, sessielogica en netwerkgrenzen bewijzen, maar niet de fysieke tv-, HDMI-, display-, audio- en firmware-uitvoer. De atomaire overdrachtslogica is automatisch getest; de volledige React-apparaatkiezer/spelerinteractie en browserspecifieke Google Cast SDK-flow hebben geen volledige componentautomatisering en blijven daarom handmatige UI- en hardwaretests. Voor deze ontwikkelwijziging is nog geen volledige test op echte Chromecast-, Google TV-, Android TV-, Samsung Tizen- of DLNA-hardware uitgevoerd.
+Geautomatiseerde tests kunnen protocolparsing, API-contracten, sessielogica en netwerkgrenzen bewijzen, maar niet de fysieke tv-, HDMI-, display-, audio- en firmware-uitvoer. De atomaire overdrachtslogica is automatisch getest; de volledige React-apparaatkiezer/spelerinteractie en browserspecifieke Google Cast SDK-flow hebben geen volledige componentautomatisering en blijven daarom handmatige UI- en hardwaretests. Er is nog geen volledige test op echte Chromecast-, Google TV-, Android TV-, Android-telefoon-, Samsung Tizen- of DLNA-hardware uitgevoerd.
 
 Noteer per test minimaal: datum, ThuisHub-commit/build, Windows-versie, netwerkinterface en -profiel, tv/receiver/model, firmware, browser/appversie, mediafixture, verwachte uitkomst, werkelijke uitkomst en relevante logcategorie. Gebruik alleen tijdelijke testmedia en nooit productiegegevens voor muterende scenario's.
 
