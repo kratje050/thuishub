@@ -32,6 +32,10 @@ describe('Windows-distributie', () => {
     const serverEntry=fs.readFileSync(path.resolve('server/src/index.ts'),'utf8');
     expect(serverEntry).toContain('void checkForUpdates();');
     expect(serverEntry).not.toContain("if (getSetting('automaticUpdateCheck'");
+    const desktopEntry=fs.readFileSync(path.resolve('desktop/main.cjs'),'utf8');
+    expect(desktopEntry).toContain("process.argv.includes('--updated')");
+    expect(desktopEntry).toContain('revealWindowAfterStart');
+    expect(desktopEntry).toContain('mainWindow.setAlwaysOnTop(true)');
   });
 
   it('accepteert alleen de exacte gecontroleerde installer en verwijdert het overdrachtsbestand', () => {
@@ -47,13 +51,19 @@ describe('Windows-distributie', () => {
   });
 
   it('start de installer pas nadat het desktopproces is afgesloten', () => {
-    let call:any;
-    const result=handoff.launchInstallerAfterExit('C:\\Updates\\ThuisHub-Setup-1.3.0.exe',4321,{restartExecutable:'C:\\Programs\\ThuisHub\\ThuisHub.exe',execProcess:(command:string,args:string[],options:any)=>{call={command,args,options};return'9876\n'}});
-    expect(call.command).toBe('powershell.exe');expect(call.options).toMatchObject({windowsHide:true,timeout:15000});expect(result.helperPid).toBe(9876);
-    const broker=Buffer.from(call.args.at(-1),'base64').toString('utf16le');
-    expect(broker).toContain('Invoke-CimMethod');expect(broker).toContain('Win32_Process');
-    expect(result.script).toContain('Wait-Process -Id 4321');expect(result.script).toContain('ThuisHub-Setup-1.3.0.exe');
-    expect(result.script).toContain("-ArgumentList '/S','--force-run' -PassThru");
-    expect(result.script).toContain('install-helper.log');expect(result.script).toContain('C:\\Programs\\ThuisHub\\ThuisHub.exe');
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'thuishub-helper-'));
+    try{
+      let call:any;const installer=path.join(root,'ThuisHub-Setup-1.3.0.exe');
+      const result=handoff.launchInstallerAfterExit(installer,4321,{restartExecutable:'C:\\Programs\\ThuisHub\\ThuisHub.exe',execProcess:(command:string,args:string[],options:any)=>{call={command,args,options};return'9876\n'}});
+      expect(call.command).toBe('powershell.exe');expect(call.options).toMatchObject({windowsHide:true,timeout:15000});expect(result.helperPid).toBe(9876);
+      const broker=Buffer.from(call.args.at(-1),'base64').toString('utf16le');
+      expect(broker).toContain('Invoke-CimMethod');expect(broker).toContain('Win32_Process');expect(broker).toContain('-File');
+      expect(result.script).toContain('Wait-Process -Id 4321');expect(result.script).toContain('ThuisHub-Setup-1.3.0.exe');
+      expect(result.script).toContain("Get-Process -Name 'ThuisHub'");
+      expect(result.script).toContain("-ArgumentList '/S','--force-run' -PassThru -Wait");
+      expect(result.script).toContain("Start-Process -FilePath $installedExecutable");
+      expect(result.script).toContain('install-helper.log');expect(result.script).toContain('C:\\Programs\\ThuisHub\\ThuisHub.exe');
+      expect(fs.existsSync(result.helperFile)).toBe(true);
+    }finally{fs.rmSync(root,{recursive:true,force:true})}
   });
 });

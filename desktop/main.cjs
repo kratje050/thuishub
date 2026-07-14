@@ -12,6 +12,7 @@ const APP_URL = 'http://localhost:8787';
 const HEALTH_URL = 'http://127.0.0.1:8787/api/health';
 const APP_ID = 'nl.thuishub.media';
 const APP_NAME = 'ThuisHub';
+const launchedAfterUpdate = process.argv.includes('--updated');
 
 let mainWindow;
 let tray;
@@ -158,6 +159,24 @@ function showWindow() {
   mainWindow.focus();
 }
 
+function revealWindowAfterStart() {
+  showWindow();
+  if (!launchedAfterUpdate || !mainWindow || mainWindow.isDestroyed()) return;
+  // Installers can restart an app behind the previous window. Briefly raising
+  // the updated window makes the successful restart unambiguous to the user.
+  mainWindow.setAlwaysOnTop(true);
+  mainWindow.moveTop();
+  mainWindow.focus();
+  const releaseTopmost = setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.setAlwaysOnTop(false);
+    mainWindow.moveTop();
+    mainWindow.focus();
+  }, 900);
+  releaseTopmost.unref?.();
+  log('Update voltooid; het vernieuwde venster is zichtbaar en actief gemaakt');
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     title: APP_NAME,
@@ -176,7 +195,11 @@ function createWindow() {
     },
   });
 
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', revealWindowAfterStart);
+  const revealFallback = setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) revealWindowAfterStart();
+  }, 5000);
+  revealFallback.unref?.();
   mainWindow.on('close', (event) => {
     if (!quitting) {
       event.preventDefault();

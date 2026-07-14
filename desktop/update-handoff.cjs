@@ -40,23 +40,93 @@ function encodedPowerShell(script) {
   return Buffer.from(script, 'utf16le').toString('base64');
 }
 
+function installLogPath(installerPath) {
+  return path.join(path.dirname(installerPath), 'install-helper.log');
+}
+
+function appendInstallLog(installerPath, message) {
+  try {
+    fs.appendFileSync(installLogPath(installerPath), `[${new Date().toISOString()}] ${message}\r\n`, 'utf8');
+  } catch {
+    // Diagnostics must never be able to cancel a verified update handoff.
+  }
+}
+
 function installerScript(installerPath, waitPid, restartExecutable = '') {
-  const logFile = path.join(path.dirname(installerPath), 'install-helper.log');
+  const logFile = installLogPath(installerPath);
   const expectedVersion = /^ThuisHub-Setup-(\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)\.exe$/i.exec(path.basename(installerPath))?.[1] || '';
   const defaultExecutable = path.join(process.env.LOCALAPPDATA || path.join(require('node:os').homedir(), 'AppData', 'Local'), 'Programs', 'ThuisHub', 'ThuisHub.exe');
   const restartCandidates = [...new Set([restartExecutable, defaultExecutable].filter(Boolean))].map(psLiteral).join(',');
-  return `$ErrorActionPreference = 'Stop'\r\n$logFile = ${psLiteral(logFile)}\r\nfunction Write-InstallLog([string]$Message) { Add-Content -LiteralPath $logFile -Value (('[{0}] {1}' -f (Get-Date).ToString('o'), $Message)) -Encoding UTF8 }\r\ntry {\r\n  Write-InstallLog 'Wachten tot ThuisHub volledig is afgesloten.'\r\n  Wait-Process -Id ${Number(waitPid)} -ErrorAction SilentlyContinue\r\n  Start-Sleep -Milliseconds 700\r\n  Write-InstallLog 'Gecontroleerde installer wordt gestart.'\r\n  $setupProcess = Start-Process -FilePath ${psLiteral(installerPath)} -ArgumentList '/S','--force-run' -PassThru\r\n  Wait-Process -Id $setupProcess.Id -ErrorAction SilentlyContinue\r\n  $setupProcess.Refresh()\r\n  $exitCode = if ($null -eq $setupProcess.ExitCode) { 0 } else { $setupProcess.ExitCode }\r\n  Write-InstallLog (('Installerproces afgesloten met code {0}.' -f $exitCode))\r\n  Start-Sleep -Seconds 3\r\n  $installedExecutable = $null\r\n  foreach ($candidate in @(${restartCandidates})) {\r\n    if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {\r\n      $candidateVersion = (Get-Item -LiteralPath $candidate).VersionInfo.FileVersion\r\n      if (-not ${psLiteral(expectedVersion)} -or $candidateVersion -like (${psLiteral(expectedVersion)} + '*')) { $installedExecutable = $candidate; break }\r\n    }\r\n  }\r\n  if (-not $installedExecutable) { throw ('De geïnstalleerde ThuisHub-versie ${expectedVersion} kon na de setup niet worden bevestigd. Installercode: {0}.' -f $exitCode) }\r\n  if ($exitCode -ne 0) { Write-InstallLog (('De setupstarter gaf code {0}, maar de nieuwe programmaversie is wel bevestigd.' -f $exitCode)) }\r\n  if (-not (Get-Process -Name 'ThuisHub' -ErrorAction SilentlyContinue)) {\r\n    Write-InstallLog (('ThuisHub handmatig herstarten via {0}.' -f $installedExecutable))\r\n    Start-Process -FilePath $installedExecutable -ArgumentList '--updated'\r\n  }\r\n  Write-InstallLog 'Update-installatie en herstart zijn voltooid.'\r\n} catch {\r\n  Write-InstallLog (('Installatiefout: {0}' -f $_.Exception.Message))\r\n  exit 1\r\n}\r\n`;
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `$logFile = ${psLiteral(logFile)}`,
+    "function Write-InstallLog([string]$Message) { try { [System.IO.File]::AppendAllText($logFile, (('[{0}] {1}' -f (Get-Date).ToString('o'), $Message) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false)) } catch {} }",
+    'try {',
+    "  Write-InstallLog 'Wachten tot ThuisHub volledig is afgesloten.'",
+    `  Wait-Process -Id ${Number(waitPid)} -ErrorAction SilentlyContinue`,
+    '  $closeDeadline = (Get-Date).AddSeconds(20)',
+    "  while ((Get-Process -Name 'ThuisHub' -ErrorAction SilentlyContinue) -and (Get-Date) -lt $closeDeadline) { Start-Sleep -Milliseconds 250 }",
+    "  if (Get-Process -Name 'ThuisHub' -ErrorAction SilentlyContinue) { throw 'Niet alle ThuisHub-processen zijn op tijd afgesloten; de installatie is uit veiligheid niet gestart.' }",
+    '  Start-Sleep -Milliseconds 500',
+    "  Write-InstallLog 'Gecontroleerde installer wordt gestart.'",
+    `  $setupProcess = Start-Process -FilePath ${psLiteral(installerPath)} -ArgumentList '/S','--force-run' -PassThru -Wait`,
+    '  $setupProcess.Refresh()',
+    '  $exitCode = if ($null -eq $setupProcess.ExitCode) { 0 } else { $setupProcess.ExitCode }',
+    "  Write-InstallLog (('Installerproces afgesloten met code {0}.' -f $exitCode))",
+    '  Start-Sleep -Seconds 3',
+    '  $installedExecutable = $null',
+    `  foreach ($candidate in @(${restartCandidates})) {`,
+    '    if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {',
+    '      $candidateVersion = (Get-Item -LiteralPath $candidate).VersionInfo.FileVersion',
+    `      if (-not ${psLiteral(expectedVersion)} -or $candidateVersion -like (${psLiteral(expectedVersion)} + '*')) { $installedExecutable = $candidate; break }`,
+    '    }',
+    '  }',
+    `  if (-not $installedExecutable) { throw ('De geïnstalleerde ThuisHub-versie ${expectedVersion} kon na de setup niet worden bevestigd. Installercode: {0}.' -f $exitCode) }`,
+    "  if ($exitCode -ne 0) { Write-InstallLog (('De setupstarter gaf code {0}, maar de nieuwe programmaversie is wel bevestigd.' -f $exitCode)) }",
+    "  Write-InstallLog (('ThuisHub opnieuw starten via {0}.' -f $installedExecutable))",
+    "  $restartProcess = Start-Process -FilePath $installedExecutable -ArgumentList '--updated' -WorkingDirectory (Split-Path -Parent $installedExecutable) -PassThru",
+    '  Start-Sleep -Seconds 2',
+    "  $running = Get-Process -Name 'ThuisHub' -ErrorAction SilentlyContinue",
+    "  if (-not $running) { throw 'De nieuwe versie is geïnstalleerd, maar Windows kon ThuisHub niet opnieuw starten.' }",
+    "  Write-InstallLog (('Update-installatie en herstart zijn voltooid. Startproces: {0}.' -f $restartProcess.Id))",
+    '} catch {',
+    "  Write-InstallLog (('Installatiefout: {0}' -f $_.Exception.Message))",
+    '  exit 1',
+    '}',
+    '',
+  ].join('\r\n');
 }
 
 function launchInstallerAfterExit(installerPath, waitPid, options = {}) {
   const script = installerScript(installerPath, waitPid, options.restartExecutable);
-  const encoded = encodedPowerShell(script);
-  const helperCommandLine = `powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${encoded}`;
-  const brokerScript = `$ErrorActionPreference = 'Stop'\r\n$commandLine = ${psLiteral(helperCommandLine)}\r\n$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $commandLine }\r\nif ($null -eq $result -or $result.ReturnValue -ne 0 -or -not $result.ProcessId) { throw ('Windows kon de updatehelper niet starten. Code: {0}' -f $result.ReturnValue) }\r\nWrite-Output $result.ProcessId\r\n`;
+  const version = /^ThuisHub-Setup-(\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)\.exe$/i.exec(path.basename(installerPath))?.[1] || 'update';
+  const helperFile = path.join(path.dirname(installerPath), `install-helper-${version}-${process.pid}.ps1`);
+  // Windows PowerShell 5.1 needs a BOM to read non-ASCII diagnostics reliably.
+  fs.writeFileSync(helperFile, `\uFEFF${script}`, 'utf8');
+  appendInstallLog(installerPath, `Updatehelperbestand gemaakt: ${helperFile}`);
+  const helperCommandLine = `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "${helperFile.replaceAll('"', '\\"')}"`;
+  const brokerScript = [
+    "$ErrorActionPreference = 'Stop'",
+    `$commandLine = ${psLiteral(helperCommandLine)}`,
+    '$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $commandLine }',
+    "if ($null -eq $result -or $result.ReturnValue -ne 0 -or -not $result.ProcessId) { throw ('Windows kon de updatehelper niet starten. Code: {0}' -f $result.ReturnValue) }",
+    'Start-Sleep -Milliseconds 350',
+    "if (-not (Get-Process -Id $result.ProcessId -ErrorAction SilentlyContinue)) { throw 'De updatehelper stopte direct na het starten.' }",
+    'Write-Output $result.ProcessId',
+    '',
+  ].join('\r\n');
   const brokerEncoded = encodedPowerShell(brokerScript);
   const execProcess = options.execProcess || execFileSync;
-  const output = execProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', brokerEncoded], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
-  return { encoded, script, brokerScript, helperPid: Number(String(output).trim()) || undefined };
+  try {
+    const output = execProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', brokerEncoded], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    const helperPid = Number(String(output).trim()) || undefined;
+    if (!helperPid) throw new Error('Windows gaf geen proces-ID voor de updatehelper terug.');
+    appendInstallLog(installerPath, `Updatehelper actief met proces-ID ${helperPid}.`);
+    return { script, brokerScript, helperFile, helperPid };
+  } catch (error) {
+    appendInstallLog(installerPath, `Updatehelper kon niet worden gestart: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
+  }
 }
 
 module.exports = { consumeInstallRequest, installerScript, launchInstallerAfterExit, sha256, validateInstallRequest };
