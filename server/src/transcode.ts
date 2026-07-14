@@ -3,17 +3,29 @@ import path from 'node:path';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { dataDir } from './db.js';
 import { ffmpegPath, videoEncoder, videoFilter } from './ffmpeg.js';
+import { log } from './logger.js';
 
 const hlsRoot = path.join(dataDir, 'hls');
+// HLS-bestanden zijn uitsluitend opnieuw te maken transcodecache. Na een
+// serverherstart bestaat er geen bijbehorend FFmpeg-proces meer, dus oude
+// gedeeltelijke playlists mogen nooit als actieve stream blijven liggen.
+fs.rmSync(hlsRoot, { recursive: true, force: true });
 fs.mkdirSync(hlsRoot, { recursive: true });
 const active = new Map<number, ChildProcessWithoutNullStreams>();
 const activeProfiles = new Map<number, string>();
-const HLS_SEGMENT_SECONDS = 2;
+const HLS_SEGMENT_SECONDS = 1;
 
 export type HlsOptions = { copyVideo?: boolean; copyAudio?: boolean; burnSubtitles?: boolean; subtitlePath?: string | null; targetBitrateMbps?: number; targetWidth?: number; targetHeight?: number };
 
 function subtitleFilterPath(value: string) {
   return value.replaceAll('\\', '/').replaceAll(':', '\\:').replaceAll("'", "\\'").replaceAll('[', '\\[').replaceAll(']', '\\]');
+}
+
+function hlsKeyframeArgs(codec: string) {
+  return [
+    ...(codec === 'h264_nvenc' ? ['-forced-idr', '1'] : []),
+    '-force_key_frames', `expr:gte(t,n_forced*${HLS_SEGMENT_SECONDS})`,
+  ];
 }
 
 export function isDirectPlayable(item: { file_path: string; video_codec?: string | null; audio_codec?: string | null }) {
@@ -49,15 +61,20 @@ export async function ensureHls(id: number, filePath: string, colorTransfer?: st
       '-hide_banner', '-loglevel', 'warning', '-i', filePath,
       '-map', '0:v:0', '-map', '0:a:0?', '-sn',
       ...videoArgs,...audioArgs,
-      ...(options.copyVideo?[]:['-force_key_frames', `expr:gte(t,n_forced*${HLS_SEGMENT_SECONDS})`]),
+      ...(options.copyVideo ? [] : hlsKeyframeArgs(encoder.codec)),
       '-f', 'hls', '-hls_time', String(HLS_SEGMENT_SECONDS), '-hls_list_size', '0', '-hls_playlist_type', 'event',
       '-hls_flags', 'independent_segments+temp_file', '-hls_segment_filename', path.join(dir, 'segment-%05d.ts'), manifest
     ];
     activeProfiles.set(id,profile);
     const process = spawn(ffmpegPath, args, { windowsHide: true });
     active.set(id, process);
-    process.on('close', () => { if (active.get(id) === process) active.delete(id); });
-    process.stderr.on('data', chunk => process.stderrLog = ((process as any).stderrLog || '') + chunk.toString());
+    process.on('error', error => { process.stderrLog = `${process.stderrLog || ''}\n${error.message}`.slice(-16_384); });
+    process.on('close', code => {
+      const wasActive = active.get(id) === process;
+      if (code && wasActive) log('ERROR', 'transcoding', 'FFmpeg-HLS-proces stopte voordat de film volledig was omgezet.', { mediaId: id, code, stderr: (process.stderrLog || '').slice(-4_096) });
+      if (wasActive) active.delete(id);
+    });
+    process.stderr.on('data', chunk => process.stderrLog = `${process.stderrLog || ''}${chunk.toString()}`.slice(-16_384));
   }
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
@@ -72,6 +89,14 @@ export function hlsFile(id: number, name: string) {
   if (!/^(index\.m3u8|segment-\d{5}\.ts)$/.test(name)) return null;
   const file = path.join(hlsRoot, String(id), name);
   return fs.existsSync(file) ? file : null;
+}
+
+export function releaseHls(id: number) {
+  const process = active.get(id);
+  if (process && process.exitCode === null && !process.killed) process.kill();
+  active.delete(id);
+  activeProfiles.delete(id);
+  fs.rmSync(path.join(hlsRoot, String(id)), { recursive: true, force: true });
 }
 
 export function dlnaMpegTsArgs(filePath: string, colorTransfer?: string | null, options: HlsOptions = {}, startSeconds = 0) {
@@ -111,6 +136,8 @@ export function clearTranscodes() {
   active.clear();
   activeProfiles.clear();
 }
+
+export const transcodeInternals = { HLS_SEGMENT_SECONDS, hlsKeyframeArgs };
 
 declare module 'node:child_process' {
   interface ChildProcessWithoutNullStreams { stderrLog?: string }

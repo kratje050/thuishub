@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { db } from '../db.js';
+import { releaseHls } from '../transcode.js';
 
 export type PlaybackSessionState = 'connecting' | 'playing' | 'paused' | 'buffering' | 'stopped' | 'error';
 
@@ -406,7 +407,12 @@ export function stopPlaybackSession(first: string | StopPlaybackSessionInput, se
     revokeRowsForSession(id);
   });
   stop();
-  return getPlaybackSession(id)!;
+  const stopped = getPlaybackSession(id)!;
+  if (current.playback_mode === 'transcode') {
+    const otherTranscodes = db.prepare("SELECT COUNT(*) count FROM playback_sessions WHERE media_id=? AND playback_mode='transcode' AND ended_at IS NULL").get(current.media_id) as { count: number };
+    if (!otherTranscodes.count) releaseHls(current.media_id);
+  }
+  return stopped;
 }
 
 function normalizeControl(first: string | ControlPlaybackSessionInput, action?: PlaybackControlAction, input?: Omit<ControlPlaybackSessionInput, 'id' | 'action'>): ControlPlaybackSessionInput {

@@ -1,5 +1,12 @@
 # Wijzigingen
 
+## 1.2.12 — 14 juli 2026
+
+- Films die moeten worden getranscodeerd starten sneller door kortere HLS-segmenten, geforceerde sleutelbeelden en het opruimen van oude tijdelijke transcodebestanden.
+- Een gestopte transcodesessie wordt direct vrijgegeven, zodat een volgende afspeelpoging niet op verouderde segmenten blijft wachten.
+- De grote dubbele afstandsbediening verdwijnt bij afspelen in de lokale browser; de normale videobediening blijft beschikbaar.
+- Externe apparaten krijgen een kleine inklapbare afstandsbediening die alleen werkelijk ondersteunde functies toont.
+
 ## 1.2.11 — 14 juli 2026
 
 - De Windows-app en browser tonen tijdens het downloaden van een update een popup met live voortgang, bestandsgrootte en SHA-256-controlefase.

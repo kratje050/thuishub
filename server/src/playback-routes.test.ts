@@ -18,7 +18,7 @@ const database = await import('./db.js');
 const tokens = await import('./playback-tokens.js');
 const sessions = await import('./playback-devices/sessions.js');
 const { playbackRouter, playbackRouteInternals } = await import('./routes/playback.js');
-const { dlnaMpegTsArgs } = await import('./transcode.js');
+const { dlnaMpegTsArgs, transcodeInternals } = await import('./transcode.js');
 
 const userId = Number(database.db.prepare("INSERT INTO users(username,password_hash,role) VALUES('route-test','test','admin')").run().lastInsertRowid);
 const sourceId = Number(database.db.prepare("INSERT INTO sources(name,path,kind) VALUES('Routetest','C:/Routetest','movies')").run().lastInsertRowid);
@@ -107,5 +107,15 @@ describe('beveiligde playbackroutes', () => {
     const args = dlnaMpegTsArgs(mediaFile, 'bt709', { targetWidth: 1920, targetBitrateMbps: 12 }, 12.5);
     expect(args).toEqual(expect.arrayContaining(['-ss', '12.500', '-c:a', 'aac', '-ac', '2', '-f', 'mpegts', 'pipe:1']));
     expect(args.join(' ')).toContain('-mpegts_flags +resend_headers');
+  });
+
+  it('maakt snel een zelfstandig eerste HLS-segment voor NVIDIA en andere encoders', () => {
+    expect(transcodeInternals.HLS_SEGMENT_SECONDS).toBe(1);
+    expect(transcodeInternals.hlsKeyframeArgs('h264_nvenc')).toEqual([
+      '-forced-idr', '1', '-force_key_frames', 'expr:gte(t,n_forced*1)',
+    ]);
+    expect(transcodeInternals.hlsKeyframeArgs('libx264')).toEqual([
+      '-force_key_frames', 'expr:gte(t,n_forced*1)',
+    ]);
   });
 });
