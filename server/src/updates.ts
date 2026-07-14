@@ -69,21 +69,48 @@ export async function checkForUpdates(fetcher:typeof fetch=fetch){
 }
 
 let downloadInProgress=false;
+type UpdateDownloadState='idle'|'downloading'|'verifying'|'ready'|'error';
+type UpdateDownloadProgress={state:UpdateDownloadState;version?:string;fileName?:string;downloadedBytes:number;totalBytes:number;percent:number;startedAt?:string;completedAt?:string;error?:string};
+const idleDownloadProgress:UpdateDownloadProgress={state:'idle',downloadedBytes:0,totalBytes:0,percent:0};
+let downloadProgress:UpdateDownloadProgress={...idleDownloadProgress};
+const MAX_UPDATE_BYTES=1024*1024*1024;
+
+function progressPercent(downloadedBytes:number,totalBytes:number){return totalBytes>0?Math.min(100,Math.max(0,Math.round(downloadedBytes/totalBytes*1000)/10)):0}
+
+export function updateDownloadStatus(){
+  if(!downloadInProgress&&downloadProgress.state==='idle'){
+    const downloaded=downloadedUpdateStatus();
+    if(downloaded.ready)return{state:'ready' as const,version:downloaded.version,fileName:downloaded.fileName,downloadedBytes:downloaded.bytes||0,totalBytes:downloaded.bytes||0,percent:100,completedAt:downloaded.downloadedAt};
+  }
+  return{...downloadProgress};
+}
+
 export async function downloadUpdate(manifest:UpdateManifest,fetcher:typeof fetch=fetch){
   if(downloadInProgress)throw new Error('Er is al een update-download actief.');
   const expectedName=manifest.assetName||`ThuisHub-Setup-${manifest.version}.exe`;
   const expectedPrefix=`https://github.com/${GITHUB_REPOSITORY}/releases/download/`;
   if(!validVersion(manifest.version)||!manifest.downloadUrl.startsWith(expectedPrefix)||expectedName!==`ThuisHub-Setup-${manifest.version}.exe`||!/^[a-f0-9]{64}$/i.test(manifest.sha256))throw new Error('Het update-manifest is ongeldig.');
   downloadInProgress=true;fs.mkdirSync(appPaths.updatesDir,{recursive:true});const name=manifest.assetName||`ThuisHub-Setup-${manifest.version}.exe`;const target=path.join(appPaths.updatesDir,path.basename(name));const temporary=`${target}.${crypto.randomBytes(5).toString('hex')}.part`;
+  downloadProgress={state:'downloading',version:manifest.version,fileName:name,downloadedBytes:0,totalBytes:Number(manifest.size)||0,percent:0,startedAt:new Date().toISOString()};
   try{
-    const response=await fetcher(manifest.downloadUrl,{headers,signal:AbortSignal.timeout(180000)});if(!response.ok)throw new Error(`Download mislukt (${response.status}).`);
-    const bytes=Buffer.from(await response.arrayBuffer());fs.writeFileSync(temporary,bytes);
-    if(manifest.size&&bytes.length!==manifest.size)throw new Error('De downloadgrootte komt niet overeen met de GitHub-release.');
-    const hash=crypto.createHash('sha256').update(bytes).digest('hex');if(hash.toLowerCase()!==manifest.sha256.toLowerCase())throw new Error('De integriteitscontrole van de update is mislukt. De huidige installatie blijft ongewijzigd.');
+    if(manifest.size&&manifest.size>MAX_UPDATE_BYTES)throw new Error('De update is onverwacht groot.');
+    const response=await fetcher(manifest.downloadUrl,{headers,signal:AbortSignal.timeout(900000)});if(!response.ok)throw new Error(`Download mislukt (${response.status}).`);
+    const declaredLength=Number(response.headers.get('content-length')||0);
+    if(declaredLength>MAX_UPDATE_BYTES||manifest.size&&declaredLength&&declaredLength!==manifest.size)throw new Error('De downloadgrootte komt niet overeen met de GitHub-release.');
+    const totalBytes=Number(manifest.size)||declaredLength||0;downloadProgress={...downloadProgress,totalBytes};
+    const digest=crypto.createHash('sha256');let received=0;const handle=fs.openSync(temporary,'wx');
+    try{
+      if(!response.body)throw new Error('GitHub leverde geen downloadgegevens.');
+      const reader=response.body.getReader();
+      while(true){const{done,value}=await reader.read();if(done)break;if(!value?.byteLength)continue;received+=value.byteLength;if(received>MAX_UPDATE_BYTES||totalBytes&&received>totalBytes)throw new Error('De update is onverwacht groot.');fs.writeSync(handle,value);digest.update(value);downloadProgress={...downloadProgress,downloadedBytes:received,totalBytes,percent:progressPercent(received,totalBytes)}}
+    }finally{fs.closeSync(handle)}
+    if(manifest.size&&received!==manifest.size)throw new Error('De downloadgrootte komt niet overeen met de GitHub-release.');
+    downloadProgress={...downloadProgress,state:'verifying',downloadedBytes:received,totalBytes:totalBytes||received,percent:100};
+    const hash=digest.digest('hex');if(hash.toLowerCase()!==manifest.sha256.toLowerCase())throw new Error('De integriteitscontrole van de update is mislukt. De huidige installatie blijft ongewijzigd.');
     if(manifest.githubDigest&&hash.toLowerCase()!==manifest.githubDigest.toLowerCase())throw new Error('De GitHub asset-digest is ongeldig.');
-    fs.renameSync(temporary,target);setSetting('downloadedUpdateResult',JSON.stringify({version:manifest.version,fileName:name,bytes:bytes.length,sha256:hash,downloadedAt:new Date().toISOString()}));log('INFO','updater','GitHub-update gedownload; grootte en SHA-256 zijn gecontroleerd.',{version:manifest.version,file:target,bytes:bytes.length});
-    return{file:target,fileName:name,version:manifest.version,bytes:bytes.length,sha256:hash,sha256Verified:true,digitallySigned:false,installRequiresConsent:true};
-  }catch(error){fs.rmSync(temporary,{force:true});fs.rmSync(target,{force:true});log('CRITICAL','updater','Updatebestand geweigerd; huidige installatie blijft actief.',{error:error instanceof Error?error.message:String(error)});throw error}
+    fs.rmSync(target,{force:true});fs.renameSync(temporary,target);const completedAt=new Date().toISOString();setSetting('downloadedUpdateResult',JSON.stringify({version:manifest.version,fileName:name,bytes:received,sha256:hash,downloadedAt:completedAt}));downloadProgress={state:'ready',version:manifest.version,fileName:name,downloadedBytes:received,totalBytes:received,percent:100,startedAt:downloadProgress.startedAt,completedAt};log('INFO','updater','GitHub-update gedownload; grootte en SHA-256 zijn gecontroleerd.',{version:manifest.version,file:target,bytes:received});
+    return{file:target,fileName:name,version:manifest.version,bytes:received,sha256:hash,sha256Verified:true,digitallySigned:false,installRequiresConsent:true};
+  }catch(error){fs.rmSync(temporary,{force:true});fs.rmSync(target,{force:true});const message=error instanceof Error?error.message:String(error);downloadProgress={...downloadProgress,state:'error',error:message,percent:0};log('CRITICAL','updater','Updatebestand geweigerd; huidige installatie blijft actief.',{error:message});throw error}
   finally{downloadInProgress=false}
 }
 
@@ -140,4 +167,4 @@ export function requestUpdateInstall(options:{desktop?:boolean;spawnProcess?:Spa
   return{accepted:true,mode:'browser',version:update.version,message:'De server sluit af. De oude programmaversie wordt automatisch vervangen en de nieuwe versie start daarna.'};
 }
 
-export const updateInternals={compareVersions,selectRelease,manifestFromRelease,exactAsset,headers,GITHUB_API,installRequestFile,verifiedDownloadedUpdate,launchInstallerAfterExit,setDownloadInProgress:(value:boolean)=>downloadInProgress=value};
+export const updateInternals={compareVersions,selectRelease,manifestFromRelease,exactAsset,headers,GITHUB_API,installRequestFile,verifiedDownloadedUpdate,launchInstallerAfterExit,setDownloadInProgress:(value:boolean)=>{downloadInProgress=value;if(!value)downloadProgress={...idleDownloadProgress}}};

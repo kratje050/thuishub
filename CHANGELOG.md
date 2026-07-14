@@ -1,5 +1,11 @@
 # Wijzigingen
 
+## 1.2.11 — 14 juli 2026
+
+- De Windows-app en browser tonen tijdens het downloaden van een update een popup met live voortgang, bestandsgrootte en SHA-256-controlefase.
+- Na het downloaden kiest de gebruiker zelf tussen direct installeren en later installeren.
+- Android toont live downloadvoortgang en start de pakketinstaller niet meer automatisch.
+
 ## 1.2.10 — 14 juli 2026
 
 - DLNA-transcoding gebruikt een continue H.264/AAC-stereo MPEG-TS-stream die door de gedetecteerde Samsung QLED wordt ondersteund, in plaats van een HLS-afspeellijst.

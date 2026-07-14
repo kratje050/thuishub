@@ -88,6 +88,18 @@ describe('beveiligde update-download',()=>{
   it('downloadt naar LocalAppData en controleert grootte en SHA-256',async()=>{
     const result=await updates.downloadUpdate(manifest,async()=>new Response(bytes));
     expect(result.sha256Verified).toBe(true);expect(result.installRequiresConsent).toBe(true);expect(path.dirname(result.file)).toBe(appPaths.updatesDir);expect(fs.readFileSync(result.file)).toEqual(bytes);
+    expect(updates.updateDownloadStatus()).toMatchObject({state:'ready',version:'1.3.0',downloadedBytes:bytes.length,totalBytes:bytes.length,percent:100});
+  });
+
+  it('meldt live downloadvoortgang voordat de integriteitscontrole en installatie beschikbaar zijn',async()=>{
+    let continueDownload!:()=>void;const gate=new Promise<void>(resolve=>{continueDownload=resolve});
+    const stream=new ReadableStream<Uint8Array>({async start(controller){controller.enqueue(bytes.subarray(0,3));await gate;controller.enqueue(bytes.subarray(3));controller.close()}});
+    const download=updates.downloadUpdate(manifest,async()=>new Response(stream,{headers:{'content-length':String(bytes.length)}}));
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(updates.updateDownloadStatus()).toMatchObject({state:'downloading',version:'1.3.0',downloadedBytes:3,totalBytes:bytes.length});
+    expect(updates.updateDownloadStatus().percent).toBeGreaterThan(0);
+    continueDownload();await download;
+    expect(updates.updateDownloadStatus()).toMatchObject({state:'ready',percent:100});
   });
 
   it('toont na downloaden Installeren en draagt een dubbel gecontroleerde installer over aan de desktop-app',async()=>{
@@ -122,6 +134,7 @@ describe('beveiligde update-download',()=>{
   it('weigert een verkeerde hash en verwijdert tijdelijke bestanden',async()=>{
     await expect(updates.downloadUpdate({...manifest,sha256:'0'.repeat(64)},async()=>new Response(bytes))).rejects.toThrow('integriteitscontrole');
     expect(fs.readdirSync(appPaths.updatesDir).some(name=>name.endsWith('.part'))).toBe(false);
+    expect(updates.updateDownloadStatus()).toMatchObject({state:'error',error:expect.stringContaining('integriteitscontrole')});
   });
 
   it('weigert een verkeerde assetnaam en andere repository',async()=>{

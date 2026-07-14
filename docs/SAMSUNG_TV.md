@@ -12,6 +12,6 @@ Dolby Vision wordt nooit geclaimd. Samsung-modellen melden alleen via de beschik
 4. Bouw met `.\scripts\build-samsung-tv.ps1`.
 5. Installeer de WGT via Tizen Studio/Device Manager op het gekoppelde testtoestel.
 
-Uitvoer, wanneer SDK en certificaat aanwezig zijn: `release\ThuisHub-Samsung-TV-1.2.10.wgt`. Zonder deze lokale vereisten stopt het script veilig en blijft de volledige bron beschikbaar. Samsung's officiële [Web App Guide](https://developer.samsung.com/smarttv/develop/tools/webapp/webapp-guide.html) beschrijft packaging en testen.
+Uitvoer, wanneer SDK en certificaat aanwezig zijn: `release\ThuisHub-Samsung-TV-1.2.11.wgt`. Zonder deze lokale vereisten stopt het script veilig en blijft de volledige bron beschikbaar. Samsung's officiële [Web App Guide](https://developer.samsung.com/smarttv/develop/tools/webapp/webapp-guide.html) beschrijft packaging en testen.
 
 Bediening gebruikt een lokale, met het apparaattoken beveiligde WebSocket en valt terug op rustig pollen. Live TV/DVR heeft in deze 1.2-testclient nog geen afzonderlijke native gids. De meegeleverde externe ondertitel-URL en audiotrackkeuze zijn nog niet als selecteerbare AVPlay-tracks aangesloten. HDR10+, DNS-SD en werkelijk audio-/ondertitelgedrag moeten per tv-model met echte hardware worden getest.

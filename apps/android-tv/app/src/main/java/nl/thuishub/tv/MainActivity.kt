@@ -1,5 +1,6 @@
 package nl.thuishub.tv
 
+import android.app.AlertDialog
 import android.app.UiModeManager
 import android.content.Context
 import android.content.Intent
@@ -24,6 +25,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -65,7 +67,7 @@ import java.util.UUID
 class MainActivity : ComponentActivity() {
     companion object {
         private const val SERVICE_TYPE = "_thuishub._tcp."
-        private const val APP_VERSION = "1.2.10"
+        private const val APP_VERSION = "1.2.11"
         private const val UPDATE_MANIFEST_URL = "https://github.com/kratje050/thuishub/releases/latest/download/latest.json"
         private const val MAX_MANIFEST_BYTES = 256 * 1024
         private const val MAX_APK_BYTES = 200L * 1024 * 1024
@@ -97,6 +99,10 @@ class MainActivity : ComponentActivity() {
     private var lastUpdateStatus = "Updates werken ook zonder gekoppelde ThuisHub-server."
     private var availableUpdate: AndroidUpdate? = null
     private var downloadedUpdateFile: File? = null
+    private var updateDownloadDialog: AlertDialog? = null
+    private var updateDialogProgress: ProgressBar? = null
+    private var updateDialogStatus: TextView? = null
+    private var updateDialogBytes: TextView? = null
     private val resolving = mutableSetOf<String>()
     private val executedCommandIds = mutableSetOf<Long>()
     private val preferences by lazy { getSharedPreferences("thuishub", MODE_PRIVATE) }
@@ -356,7 +362,7 @@ class MainActivity : ComponentActivity() {
             }, LinearLayout.LayoutParams(-1, -2))
             val downloaded = downloadedUpdateFile?.takeIf { it.isFile }
             column.addView(Button(this).apply {
-                text = if (downloaded == null) "Downloaden en installeren" else "Installeren"
+                text = if (downloaded == null) "Downloaden" else "Installeren"
                 isAllCaps = false
                 isEnabled = updateJob?.isActive != true
                 setOnClickListener {
@@ -530,27 +536,42 @@ class MainActivity : ComponentActivity() {
         if (updateJob?.isActive == true) return
         lastUpdateStatus = "ThuisHub ${update.version} downloaden en controleren…"
         updateScreenStatus?.text = lastUpdateStatus
+        showUpdateDownloadDialog(update)
         updateJob = lifecycleScope.launch {
             try {
-                val file = withContext(Dispatchers.IO) { downloadAndVerifyApk(update) }
+                val file = withContext(Dispatchers.IO) {
+                    downloadAndVerifyApk(
+                        update,
+                        onProgress = { downloaded, total ->
+                            runOnUiThread { updateDownloadProgress(downloaded, total) }
+                        },
+                        onVerifying = {
+                            runOnUiThread {
+                                updateDialogStatus?.text = "Download controleren met SHA-256…"
+                                updateDialogProgress?.isIndeterminate = true
+                            }
+                        }
+                    )
+                }
                 downloadedUpdateFile = file
                 lastUpdateStatus = "Download voltooid en SHA-256 gecontroleerd."
                 updateJob = null
-                if (currentScreen == AppScreen.UPDATES) {
-                    showUpdates()
-                    launchApkInstaller(file)
-                } else {
-                    showToast("Update gedownload en gecontroleerd. Open App-updates om te installeren.")
-                }
+                if (currentScreen == AppScreen.UPDATES) showUpdates()
+                showUpdateReadyDialog(update, file)
             } catch (error: Exception) {
                 lastUpdateStatus = error.message ?: "Downloaden van de update is mislukt."
                 updateJob = null
                 if (currentScreen == AppScreen.UPDATES) showUpdates()
+                showUpdateDownloadError(lastUpdateStatus)
             }
         }
     }
 
-    private fun downloadAndVerifyApk(update: AndroidUpdate): File {
+    private fun downloadAndVerifyApk(
+        update: AndroidUpdate,
+        onProgress: (downloaded: Long, total: Long) -> Unit,
+        onVerifying: () -> Unit
+    ): File {
         if (!Regex("^ThuisHub-Android-\\d+\\.\\d+\\.\\d+\\.apk$").matches(update.assetName)) {
             throw IllegalStateException("Ongeldige Android-update geweigerd.")
         }
@@ -568,6 +589,7 @@ class MainActivity : ComponentActivity() {
             if (declaredLength > MAX_APK_BYTES) throw IllegalStateException("De Android-update is onverwacht groot.")
             val digest = MessageDigest.getInstance("SHA-256")
             var total = 0L
+            onProgress(0, declaredLength)
             connection.inputStream.use { input ->
                 temporary.outputStream().buffered().use { output ->
                     val buffer = ByteArray(64 * 1024)
@@ -578,9 +600,12 @@ class MainActivity : ComponentActivity() {
                         if (total > MAX_APK_BYTES) throw IllegalStateException("De Android-update is onverwacht groot.")
                         digest.update(buffer, 0, count)
                         output.write(buffer, 0, count)
+                        onProgress(total, declaredLength)
                     }
                 }
             }
+            if (declaredLength > 0 && total != declaredLength) throw IllegalStateException("De Android-update is niet volledig gedownload.")
+            onVerifying()
             val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
             if (actualHash != update.sha256) throw IllegalStateException("De SHA-256-controle van de Android-update is mislukt.")
             target.delete()
@@ -590,6 +615,99 @@ class MainActivity : ComponentActivity() {
             connection.disconnect()
             if (temporary.exists()) temporary.delete()
         }
+    }
+
+    private fun showUpdateDownloadDialog(update: AndroidUpdate) {
+        updateDownloadDialog?.dismiss()
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(10), dp(24), dp(4))
+        }
+        val status = TextView(this).apply {
+            text = "De update wordt veilig van GitHub gedownload."
+            textSize = 16f
+            setPadding(0, 0, 0, dp(18))
+        }
+        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1_000
+            isIndeterminate = true
+        }
+        val bytes = TextView(this).apply {
+            text = "Download voorbereiden…"
+            textSize = 13f
+            setPadding(0, dp(10), 0, 0)
+        }
+        content.addView(status, LinearLayout.LayoutParams(-1, -2))
+        content.addView(progress, LinearLayout.LayoutParams(-1, dp(10)))
+        content.addView(bytes, LinearLayout.LayoutParams(-1, -2))
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("ThuisHub ${update.version} downloaden")
+            .setView(content)
+            .setPositiveButton("Installeren", null)
+            .setNegativeButton("Verbergen", null)
+            .create()
+        updateDownloadDialog = dialog
+        updateDialogProgress = progress
+        updateDialogStatus = status
+        updateDialogBytes = bytes
+        dialog.setOnDismissListener {
+            if (updateDownloadDialog === dialog) {
+                updateDownloadDialog = null
+                updateDialogProgress = null
+                updateDialogStatus = null
+                updateDialogBytes = null
+            }
+        }
+        dialog.show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).visibility = View.GONE
+    }
+
+    private fun updateDownloadProgress(downloaded: Long, total: Long) {
+        val progress = updateDialogProgress ?: return
+        progress.isIndeterminate = total <= 0
+        if (total > 0) progress.progress = ((downloaded * 1_000L) / total).coerceIn(0L, 1_000L).toInt()
+        updateDialogStatus?.text = "Update downloaden…"
+        updateDialogBytes?.text = if (total > 0) {
+            "${formatUpdateBytes(downloaded)} van ${formatUpdateBytes(total)} (${((downloaded * 100L) / total).coerceIn(0L, 100L)}%)"
+        } else {
+            "${formatUpdateBytes(downloaded)} gedownload"
+        }
+    }
+
+    private fun showUpdateReadyDialog(update: AndroidUpdate, file: File) {
+        if (updateDownloadDialog == null) showUpdateDownloadDialog(update)
+        val dialog = updateDownloadDialog ?: return
+        dialog.setTitle("Update klaar om te installeren")
+        updateDialogProgress?.apply {
+            isIndeterminate = false
+            progress = max
+        }
+        updateDialogStatus?.text = "ThuisHub ${update.version} is gedownload en veilig gecontroleerd."
+        updateDialogBytes?.text = "${formatUpdateBytes(file.length())} • Klaar voor installatie"
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).apply {
+            visibility = View.VISIBLE
+            text = "Installeren"
+            setOnClickListener { launchApkInstaller(file) }
+        }
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text = "Later"
+    }
+
+    private fun showUpdateDownloadError(message: String) {
+        val update = availableUpdate ?: return
+        if (updateDownloadDialog == null) showUpdateDownloadDialog(update)
+        val dialog = updateDownloadDialog ?: return
+        dialog.setTitle("Download mislukt")
+        updateDialogProgress?.visibility = View.GONE
+        updateDialogStatus?.text = message
+        updateDialogBytes?.text = "Probeer het later opnieuw via App-updates."
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).visibility = View.GONE
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).text = "Sluiten"
+    }
+
+    private fun formatUpdateBytes(value: Long): String = when {
+        value >= 1024L * 1024L -> String.format("%.1f MB", value / (1024.0 * 1024.0))
+        value >= 1024L -> String.format("%.1f kB", value / 1024.0)
+        else -> "$value bytes"
     }
 
     private fun openTrustedUpdateConnection(urlValue: String): HttpURLConnection {
@@ -1333,6 +1451,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         connectionJob?.cancel()
         updateJob?.cancel()
+        updateDownloadDialog?.dismiss()
         pairingJob?.cancel()
         commandJob?.cancel()
         releasePlayback()
