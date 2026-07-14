@@ -18,9 +18,9 @@ De updater selecteert nooit het eerste willekeurige EXE-bestand. Downloads gaan 
 npm run check
 npm run dist:win
 .\scripts\build-android-tv.ps1
-.\scripts\generate-release-metadata.ps1 -Version 1.2.13
+.\scripts\generate-release-metadata.ps1 -Version 1.2.14
 .\scripts\scan-release-secrets.ps1 -IncludeReleaseArtifacts
-.\scripts\publish-github-release.ps1 -Version 1.2.13
+.\scripts\publish-github-release.ps1 -Version 1.2.14
 ```
 
 Het laatste commando controleert `gh auth status`, maakt hashes/manifest opnieuw, scant, maakt zo nodig een lokale tag en creëert standaard alleen een **draft** in `kratje050/thuishub`. Gebruik `-Publish` uitsluitend wanneer u na inspectie interactief exact `PUBLICEREN` wilt typen. Het script pusht geen broncode.

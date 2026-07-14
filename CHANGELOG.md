@@ -1,5 +1,13 @@
 # Wijzigingen
 
+## 1.2.14 — 14 juli 2026
+
+- Android herkent varianten van de ThuisHub-mDNS-servicenaam voortaan correct.
+- Een snelle, uitsluitend lokale UDP-detectie vindt de pc-server ook wanneer de router mDNS niet doorlaat.
+- De begrensde subnetfallback zoekt langer, controleert lage én hoge adressen vroeg en vindt daardoor pc-adressen zoals `.223` aanzienlijk sneller.
+- De Windows-updatehelper wacht aantoonbaar op afsluiten, start de nieuwe versie altijd expliciet en brengt het vernieuwde venster naar voren.
+- De aanvullende firewallregel blijft beperkt tot het geselecteerde privé-adres, profiel Privé en `LocalSubnet`.
+
 ## 1.2.13 — 14 juli 2026
 
 - De Windows-updatehelper wordt buiten de ThuisHub-procesgroep gestart en blijft daardoor actief nadat de app en server zijn afgesloten.

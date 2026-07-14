@@ -72,7 +72,7 @@ class MainActivity : ComponentActivity() {
         private const val SERVICE_TYPE = "_thuishub._tcp."
         private const val DISCOVERY_PORT = 8789
         private const val DISCOVERY_REQUEST = "THUISHUB_DISCOVER_V1"
-        private const val APP_VERSION = "1.2.13"
+        private const val APP_VERSION = "1.2.14"
         private const val UPDATE_MANIFEST_URL = "https://github.com/kratje050/thuishub/releases/latest/download/latest.json"
         private const val MAX_MANIFEST_BYTES = 256 * 1024
         private const val MAX_APK_BYTES = 200L * 1024 * 1024
