@@ -1,5 +1,11 @@
 # Wijzigingen
 
+## 1.2.9 — 14 juli 2026
+
+- De melding “Video wordt klaargemaakt” is voortaan gekoppeld aan de werkelijke laad- en bufferstatus en blijft niet meer over een spelende film staan.
+- Laden, afspelen, bufferen, zoeken, fouten en beëindigen werken de zichtbaarheid van de spelerstatus direct bij.
+- HLS-transcodering maakt startsegmenten van 2 seconden in plaats van 6 seconden voor een snellere eerste weergave.
+
 ## 1.2.8 — 14 juli 2026
 
 - Android zoekt na een mislukte mDNS-detectie automatisch verder op het eigen privé-wifisubnet.

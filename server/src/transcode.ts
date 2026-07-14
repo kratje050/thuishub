@@ -8,6 +8,7 @@ const hlsRoot = path.join(dataDir, 'hls');
 fs.mkdirSync(hlsRoot, { recursive: true });
 const active = new Map<number, ChildProcessWithoutNullStreams>();
 const activeProfiles = new Map<number, string>();
+const HLS_SEGMENT_SECONDS = 2;
 
 export type HlsOptions = { copyVideo?: boolean; copyAudio?: boolean; burnSubtitles?: boolean; subtitlePath?: string | null; targetBitrateMbps?: number; targetWidth?: number; targetHeight?: number };
 
@@ -48,8 +49,8 @@ export async function ensureHls(id: number, filePath: string, colorTransfer?: st
       '-hide_banner', '-loglevel', 'warning', '-i', filePath,
       '-map', '0:v:0', '-map', '0:a:0?', '-sn',
       ...videoArgs,...audioArgs,
-      ...(options.copyVideo?[]:['-force_key_frames', 'expr:gte(t,n_forced*6)']),
-      '-f', 'hls', '-hls_time', '6', '-hls_list_size', '0', '-hls_playlist_type', 'event',
+      ...(options.copyVideo?[]:['-force_key_frames', `expr:gte(t,n_forced*${HLS_SEGMENT_SECONDS})`]),
+      '-f', 'hls', '-hls_time', String(HLS_SEGMENT_SECONDS), '-hls_list_size', '0', '-hls_playlist_type', 'event',
       '-hls_flags', 'independent_segments+temp_file', '-hls_segment_filename', path.join(dir, 'segment-%05d.ts'), manifest
     ];
     activeProfiles.set(id,profile);

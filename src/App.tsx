@@ -65,6 +65,7 @@ function Player({ item, settings, onClose, onProgress, onFinished }: { item: Med
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState('');
   const [transcoding, setTranscoding] = useState(false);
+  const [preparing, setPreparing] = useState(true);
   const hlsRef = useRef<Hls | null>(null);
   const lastSaved = useRef(0);
   const playbackSession = useRef<PlaybackSession | null>(null);
@@ -148,7 +149,7 @@ function Player({ item, settings, onClose, onProgress, onFinished }: { item: Med
 
   useEffect(() => {
     const video = videoRef.current!;let cancelled=false;
-    hlsRef.current?.destroy();setError('');
+    hlsRef.current?.destroy();setError('');setPreparing(true);
     playbackSession.current=null;
     const requestedPosition = restartPosition.current?.mediaId !== item.id
       ? Math.max(0, Number(item.progress?.position || 0) - Number(settings.rewindOnResume || 0))
@@ -180,10 +181,20 @@ function Player({ item, settings, onClose, onProgress, onFinished }: { item: Med
 
   return <div className="player-layer">
     <div className="player-top"><div><strong>{item.kind === 'episode' ? item.seriesTitle : item.title}</strong>{item.kind === 'episode' && <span>S{item.season} · A{item.episode} · {item.title}</span>}{playbackInfo&&<span className={`playback-mode ${playbackInfo.decision.mode}`}>{playbackInfo.decision.label}</span>}</div><PlayerControls><CastButton item={item} settings={settings} onError={setError} getStartPosition={()=>Number(videoRef.current?.currentTime || item.progress?.position || 0)}/><label>Kwaliteit <select value={quality} onChange={e=>setQuality(e.target.value)}><option value="auto">Automatisch</option><option value="original">Origineel</option><option value="4k-max">4K Maximum</option><option value="4k-high">4K Hoog</option><option value="4k-balanced">4K Gebalanceerd</option><option value="1080p-max">1080p Maximum</option><option value="1080p-high">1080p Hoog</option><option value="1080p-balanced">1080p Gebalanceerd</option><option value="720p">720p</option><option value="data-saver">Databesparing</option></select></label><label>Snelheid <select value={speed} onChange={e=>changeSpeed(Number(e.target.value))}>{[.5,.75,1,1.25,1.5,2].map(x=><option key={x} value={x}>{x}×</option>)}</select></label><button onClick={()=>setShowTechnical(!showTechnical)}>Technische informatie</button><button className="icon-button" onClick={onClose} aria-label="Sluiten"><Icon name="close" /></button></PlayerControls></div>
-    <video ref={videoRef} controls autoPlay playsInline onPlaying={()=>report('playing')} onPause={()=>report('paused')} onError={()=>report('error')} onEnded={finish}>
+    <video ref={videoRef} controls autoPlay playsInline
+      onLoadStart={()=>setPreparing(true)}
+      onLoadedData={()=>setPreparing(false)}
+      onCanPlay={()=>setPreparing(false)}
+      onPlaying={()=>{setPreparing(false);report('playing');}}
+      onWaiting={()=>{if(!videoRef.current?.paused)setPreparing(true);}}
+      onSeeking={()=>setPreparing(true)}
+      onSeeked={()=>{if((videoRef.current?.readyState||0)>=3)setPreparing(false);}}
+      onPause={()=>report('paused')}
+      onError={()=>{setPreparing(false);report('error');}}
+      onEnded={()=>{setPreparing(false);finish();}}>
       {item.hasSubtitle && playbackInfo?.urls.subtitle && <track default kind="subtitles" srcLang="nl" label="Nederlands" src={playbackInfo.urls.subtitle} />}
     </video>
-    {transcoding && !error && <div className="player-status"><span className="spinner" /><strong>Video wordt klaargemaakt</strong><small>De eerste keer kan dit even duren</small></div>}
+    {preparing && !error && <div className="player-status" role="status" aria-live="polite"><span className="spinner" /><strong>{transcoding?'Video wordt klaargemaakt':'Video wordt geladen'}</strong><small>{transcoding?'De eerste keer kan dit even duren':'Even geduld…'}</small></div>}
     {error && <div className="player-status"><strong>{error}</strong></div>}
     {showTechnical&&playbackInfo&&<aside className="technical-playback"><header><strong>Technische informatie</strong><button onClick={()=>setShowTechnical(false)}>Sluiten</button></header><div className="technical-grid"><span>Methode<b>{playbackInfo.decision.label}</b></span><span>Container<b>{playbackInfo.technical.container} → {playbackInfo.decision.outputContainer}</b></span><span>Video<b>{playbackInfo.technical.videoCodec} → {playbackInfo.decision.outputVideoCodec}</b></span><span>Beeld<b>{playbackInfo.technical.width}×{playbackInfo.technical.height} · {playbackInfo.technical.frameRate?.toFixed?.(3)||'?'} fps · {playbackInfo.technical.bitDepth}-bit</b></span><span>HDR<b>{playbackInfo.technical.hdr}{playbackInfo.technical.dolbyVisionProfile?` profiel ${playbackInfo.technical.dolbyVisionProfile}`:''}</b></span><span>Audio<b>{playbackInfo.technical.audioCodec} · {playbackInfo.technical.audioChannels||'?'} kanalen{playbackInfo.technical.atmos?' · Dolby Atmos':''}</b></span><span>Passthrough<b>{playbackInfo.decision.copyAudio?'Ja':'Nee'}</b></span><span>Netwerk<b>{playbackInfo.decision.network}</b></span></div>{playbackInfo.decision.reasons.length>0&&<ul>{playbackInfo.decision.reasons.map((reason:string)=><li key={reason}>{reason}</li>)}</ul>}<div className="codec-badges">{[playbackInfo.technical.height>=2160?'4K':null,playbackInfo.technical.hdr!=='sdr'?String(playbackInfo.technical.hdr).toUpperCase():null,playbackInfo.technical.atmos?'Dolby Atmos':null,playbackInfo.decision.label].filter(Boolean).map((badge:string)=><b key={badge}>{badge}</b>)}</div></aside>}
     {activeMarker && ((activeMarker.type==='intro'&&settings.skipIntro)||(activeMarker.type==='credits'&&settings.skipCredits)||activeMarker.type==='commercial') && <button className="skip-button" onClick={()=>{if(videoRef.current)videoRef.current.currentTime=activeMarker.endTime;}}>{activeMarker.type==='intro'?'Intro overslaan':activeMarker.type==='credits'?'Aftiteling overslaan':'Reclame overslaan'} →</button>}
