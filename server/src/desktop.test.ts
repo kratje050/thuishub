@@ -17,10 +17,10 @@ describe('Windows-distributie', () => {
 
   it('configureert portable, installer en veilige upgrade', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
-    expect(packageJson.version).toBe('1.2.17');
+    expect(packageJson.version).toBe('1.2.18');
     expect(packageJson.build.nsis.artifactName).toContain('ThuisHub-Setup');
     expect(packageJson.build.nsis.deleteAppDataOnUninstall).toBe(false);
-    expect(packageJson.build.nsis.useZip).toBe(true);
+    expect(packageJson.build.nsis.useZip).toBe(false);
     expect(packageJson.build.portable.artifactName).toContain('ThuisHub-Portable');
     expect(packageJson.build.appId).toBe('nl.huiskamer.media');
     const installerInclude=fs.readFileSync(path.resolve('build/installer.nsh'),'utf8');
@@ -63,8 +63,13 @@ describe('Windows-distributie', () => {
       expect(broker).toContain('Invoke-CimMethod');expect(broker).toContain('Win32_Process');expect(broker).toContain('-File');
       expect(result.script).toContain('Wait-Process -Id 4321');expect(result.script).toContain('ThuisHub-Setup-1.3.0.exe');
       expect(result.script).toContain("Get-Process -Name 'ThuisHub'");
-      expect(result.script).toContain("-ArgumentList '/S','--force-run' -PassThru -Wait");
+      expect(result.script).toContain("Name='node.exe'");
+      expect(result.script).toContain('resources\\runtime\\node.exe');
+      expect(result.script).toContain('Achtergebleven ThuisHub-server afsluiten');
+      expect(result.script).toContain("-ArgumentList '/S' -PassThru -Wait");
+      expect(result.script).not.toContain("'/S','--force-run'");
       expect(result.script).toContain("Start-Process -FilePath $installedExecutable");
+      expect(result.script).toContain('$restartDeadline');
       expect(result.script).toContain('$installReadyDeadline');
       expect(result.script).not.toContain('Start-Sleep -Seconds 3');
       expect(result.script).toContain('install-helper.log');expect(result.script).toContain('C:\\Programs\\ThuisHub\\ThuisHub.exe');

@@ -56,7 +56,9 @@ function installerScript(installerPath, waitPid, restartExecutable = '') {
   const logFile = installLogPath(installerPath);
   const expectedVersion = /^ThuisHub-Setup-(\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?)\.exe$/i.exec(path.basename(installerPath))?.[1] || '';
   const defaultExecutable = path.join(process.env.LOCALAPPDATA || path.join(require('node:os').homedir(), 'AppData', 'Local'), 'Programs', 'ThuisHub', 'ThuisHub.exe');
-  const restartCandidates = [...new Set([restartExecutable, defaultExecutable].filter(Boolean))].map(psLiteral).join(',');
+  const executableCandidates = [...new Set([restartExecutable, defaultExecutable].filter(Boolean))];
+  const restartCandidates = executableCandidates.map(psLiteral).join(',');
+  const runtimeNodeCandidates = executableCandidates.map(executable => psLiteral(path.join(path.dirname(executable), 'resources', 'runtime', 'node.exe'))).join(',');
   return [
     "$ErrorActionPreference = 'Stop'",
     `$logFile = ${psLiteral(logFile)}`,
@@ -67,8 +69,14 @@ function installerScript(installerPath, waitPid, restartExecutable = '') {
     '  $closeDeadline = (Get-Date).AddSeconds(20)',
     "  while ((Get-Process -Name 'ThuisHub' -ErrorAction SilentlyContinue) -and (Get-Date) -lt $closeDeadline) { Start-Sleep -Milliseconds 250 }",
     "  if (Get-Process -Name 'ThuisHub' -ErrorAction SilentlyContinue) { throw 'Niet alle ThuisHub-processen zijn op tijd afgesloten; de installatie is uit veiligheid niet gestart.' }",
+    `  $runtimeNodePaths = @(${runtimeNodeCandidates})`,
+    "  $staleServers = @(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $runtimeNodePaths -contains $_.ExecutablePath })",
+    "  foreach ($staleServer in $staleServers) { Write-InstallLog (('Achtergebleven ThuisHub-server afsluiten: {0}.' -f $staleServer.ProcessId)); Stop-Process -Id $staleServer.ProcessId -Force -ErrorAction SilentlyContinue }",
+    '  foreach ($staleServer in $staleServers) { Wait-Process -Id $staleServer.ProcessId -Timeout 10 -ErrorAction SilentlyContinue }',
+    "  $remainingServer = $staleServers | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }",
+    "  if ($remainingServer) { throw 'De oude ThuisHub-server kon niet worden afgesloten; de installatie is niet gestart.' }",
     "  Write-InstallLog 'Gecontroleerde installer wordt gestart.'",
-    `  $setupProcess = Start-Process -FilePath ${psLiteral(installerPath)} -ArgumentList '/S','--force-run' -PassThru -Wait`,
+    `  $setupProcess = Start-Process -FilePath ${psLiteral(installerPath)} -ArgumentList '/S' -PassThru -Wait`,
     '  $setupProcess.Refresh()',
     '  $exitCode = if ($null -eq $setupProcess.ExitCode) { 0 } else { $setupProcess.ExitCode }',
     "  Write-InstallLog (('Installerproces afgesloten met code {0}.' -f $exitCode))",
@@ -87,10 +95,14 @@ function installerScript(installerPath, waitPid, restartExecutable = '') {
     "  if ($exitCode -ne 0) { Write-InstallLog (('De setupstarter gaf code {0}, maar de nieuwe programmaversie is wel bevestigd.' -f $exitCode)) }",
     "  Write-InstallLog (('ThuisHub opnieuw starten via {0}.' -f $installedExecutable))",
     "  $restartProcess = Start-Process -FilePath $installedExecutable -ArgumentList '--updated' -WorkingDirectory (Split-Path -Parent $installedExecutable) -PassThru",
-    '  Start-Sleep -Milliseconds 250',
-    "  $running = Get-Process -Id $restartProcess.Id -ErrorAction SilentlyContinue",
+    '  $restartDeadline = (Get-Date).AddSeconds(15)',
+    '  $running = $null',
+    '  do {',
+    '    Start-Sleep -Milliseconds 250',
+    "    $running = Get-Process -Name 'ThuisHub' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installedExecutable } | Select-Object -First 1",
+    '  } while (-not $running -and (Get-Date) -lt $restartDeadline)',
     "  if (-not $running) { throw 'De nieuwe versie is geïnstalleerd, maar Windows kon ThuisHub niet opnieuw starten.' }",
-    "  Write-InstallLog (('Update-installatie en herstart zijn voltooid. Startproces: {0}.' -f $restartProcess.Id))",
+    "  Write-InstallLog (('Update-installatie en herstart zijn voltooid. Actief proces: {0}.' -f $running.Id))",
     '} catch {',
     "  Write-InstallLog (('Installatiefout: {0}' -f $_.Exception.Message))",
     '  exit 1',

@@ -3,7 +3,7 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android {
     namespace = "nl.thuishub.tv"
     compileSdk = 35
-    defaultConfig { applicationId = "nl.thuishub.tv"; minSdk = 26; targetSdk = 35; versionCode = 137; versionName = "1.2.17" }
+    defaultConfig { applicationId = "nl.thuishub.tv"; minSdk = 26; targetSdk = 35; versionCode = 138; versionName = "1.2.18" }
     buildTypes { release { isMinifyEnabled = false; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }

@@ -53,7 +53,7 @@ function getIconPath() {
     : path.join(__dirname, '..', 'build', 'icon.png');
 }
 
-function healthCheck(timeout = 1500) {
+function healthCheck(timeout = 1500, requireCurrentVersion = false) {
   return new Promise((resolve) => {
     const request = http.get(HEALTH_URL, { timeout }, (response) => {
       let body = '';
@@ -62,7 +62,7 @@ function healthCheck(timeout = 1500) {
       response.on('end', () => {
         try {
           const result = JSON.parse(body);
-          resolve(result.app === 'thuishub' && result.status === 'ok');
+          resolve(result.app === 'thuishub' && result.status === 'ok' && (!requireCurrentVersion || result.version === app.getVersion()));
         } catch {
           resolve(false);
         }
@@ -71,6 +71,25 @@ function healthCheck(timeout = 1500) {
     request.on('timeout', () => request.destroy());
     request.on('error', () => resolve(false));
   });
+}
+
+function stopBundledServer() {
+  if (!app.isPackaged) return false;
+  const expectedNode = path.join(process.resourcesPath, 'runtime', 'node.exe');
+  const escapedPath = expectedNode.replaceAll("'", "''");
+  const script = [
+    `$expected = '${escapedPath}'`,
+    `$servers = @(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and [StringComparer]::OrdinalIgnoreCase.Equals($_.ExecutablePath, $expected) })`,
+    `$servers | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
+    `$servers.Count`,
+  ].join('\r\n');
+  try {
+    const output = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    return Number(String(output).trim()) > 0;
+  } catch (error) {
+    log(`Oude meegeleverde server kon niet worden afgesloten: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
 }
 
 function isPortOpen() {
@@ -85,7 +104,12 @@ function isPortOpen() {
 
 async function ensureServer() {
   log('Server controleren');
-  if (await healthCheck()) return;
+  if (await healthCheck(1500, true)) return;
+  if (await healthCheck()) {
+    log(`Een oude ThuisHub-server gebruikt poort 8787; versie ${app.getVersion()} neemt de poort veilig over.`);
+    if (!stopBundledServer()) throw new Error('Een oude ThuisHub-server draait nog. Sluit ThuisHub volledig af en start de nieuwe versie opnieuw.');
+    for (let attempt = 0; attempt < 40 && await isPortOpen(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 125));
+  }
   if (await isPortOpen()) {
     throw new Error('Poort 8787 wordt al door een ander programma of de oude Huiskamer-versie gebruikt. Sluit dat programma en start ThuisHub opnieuw.');
   }
@@ -116,7 +140,7 @@ async function ensureServer() {
   serverProcess.on('exit', (code) => log(`Server gestopt met code ${code}`));
 
   for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (await healthCheck(500)) return;
+    if (await healthCheck(500, true)) return;
     await new Promise((resolve) => setTimeout(resolve, 125));
   }
   throw new Error('De ThuisHub-server reageerde niet op tijd.');
