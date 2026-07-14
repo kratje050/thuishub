@@ -138,6 +138,14 @@ describe('veilige DLNA-discovery', () => {
     expect(device.name).toBe('65" QLED');
   });
 
+  it('kent het Samsung QE65QEF1AUXXN-profiel toe aan de DLNA-renderer', async () => {
+    const xml = rendererXml()
+      .replace('<manufacturer>Voorbeeld</manufacturer>', '<manufacturer>Samsung Electronics</manufacturer>')
+      .replace('<modelName>Renderer One</modelName>', '<modelName>QE65QEF1AUXXN</modelName>');
+    const device = await parseDlnaDeviceDescription(xml, { descriptionUrl: response().location, sourceAddress: '192.168.1.40', ...subnet });
+    expect(device.capabilities).toMatchObject({ platform: 'tizen', maxWidth: 3840, maxAudioChannels: 6, eac3: true, connectionManager: true });
+  });
+
   it('parseert alleen geldige SSDP MediaRenderer/service-antwoorden', () => {
     const valid = `HTTP/1.1 200 OK\r\nLOCATION: http://192.168.1.40/device.xml\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\nUSN: uuid:renderer-1234::urn:schemas-upnp-org:device:MediaRenderer:1\r\n\r\n`;
     expect(parseSsdpResponse(valid, '192.168.1.40')).toMatchObject({ location: 'http://192.168.1.40/device.xml' });
@@ -176,6 +184,7 @@ describe('DLNA-controller', () => {
       const action = headers.SOAPAction || '';
       calls.push({ action, body: String(init?.body || '') });
       if (action.includes('#GetPositionInfo')) return new Response(`<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetPositionInfoResponse xmlns:u="urn:schemas-upnp-org:service:AVTransport:1"><Track>2</Track><TrackDuration>01:02:03</TrackDuration><RelTime>00:01:05</RelTime><TrackURI>http://192.168.1.10:8788/api/playback/1/file</TrackURI></u:GetPositionInfoResponse></s:Body></s:Envelope>`);
+      if (action.includes('#GetProtocolInfo')) return new Response(`<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetProtocolInfoResponse xmlns:u="urn:schemas-upnp-org:service:ConnectionManager:1"><Source></Source><Sink>http-get:*:video/mp4:*,http-get:*:video/mpeg:*</Sink></u:GetProtocolInfoResponse></s:Body></s:Envelope>`);
       return new Response(`<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body/></s:Envelope>`);
     }) as typeof fetch;
     const controller = new DlnaController(device, { fetcher });
@@ -184,15 +193,17 @@ describe('DLNA-controller', () => {
     await controller.stop();
     await controller.seek(65);
     const position = await controller.getPosition();
+    const protocols = await controller.getProtocolInfo();
     expect(await controller.setVolume(0.42)).toBe(42);
 
     expect(calls.map(call => call.action)).toEqual(expect.arrayContaining([
       expect.stringContaining('#SetAVTransportURI'), expect.stringContaining('#Play'), expect.stringContaining('#Pause'),
-      expect.stringContaining('#Stop'), expect.stringContaining('#Seek'), expect.stringContaining('#GetPositionInfo'), expect.stringContaining('#SetVolume'),
+      expect.stringContaining('#Stop'), expect.stringContaining('#Seek'), expect.stringContaining('#GetPositionInfo'), expect.stringContaining('#GetProtocolInfo'), expect.stringContaining('#SetVolume'),
     ]));
     expect(calls.find(call => call.action.includes('#Seek'))?.body).toContain('<Target>00:01:05</Target>');
     expect(calls.find(call => call.action.includes('#SetVolume'))?.body).toContain('<DesiredVolume>42</DesiredVolume>');
     expect(position).toMatchObject({ positionSeconds: 65, durationSeconds: 3_723, track: 2 });
+    expect(protocols.sink).toContain('video/mp4');
     const count = calls.length;
     await expect(controller.setTransportUri('http://127.0.0.1:8787/api/playback/1/file')).rejects.toThrow(/privé|localhost/);
     expect(calls).toHaveLength(count);

@@ -35,16 +35,16 @@ function sessionToken() {
   return { session, token: tokens.createPlaybackGrant({ sessionId: session.id, resource: 'file' }) };
 }
 
-function dlnaToken() {
+function dlnaToken(startPosition = 0) {
   const session = sessions.createPlaybackSession({ userId, mediaId, deviceId: 'route-tv', protocol: 'dlna-upnp', state: 'playing', duration: 100 });
-  return { session, token: tokens.createPlaybackGrant({ sessionId: session.id, resource: 'dlna', options: { copyVideo: false, copyAudio: false, targetWidth: 1920 } }) };
+  return { session, token: tokens.createPlaybackGrant({ sessionId: session.id, resource: 'dlna', options: { copyVideo: false, copyAudio: false, targetWidth: 1920, startPosition } }) };
 }
 
 describe('beveiligde playbackroutes', () => {
   it('levert correcte en gelijktijdige HTTP ranges', async () => {
     const { token } = sessionToken();
     const ranges = ['bytes=0-3', 'bytes=4-7', 'bytes=-4'];
-    const responses = await Promise.all(ranges.map(range => request(app).get(`/api/playback/${mediaId}/file?token=${encodeURIComponent(token)}`).set('Range', range)));
+    const responses = await Promise.all(ranges.map(range => request(app).get(`/api/playback/${mediaId}/file.mp4?token=${encodeURIComponent(token)}`).set('Range', range)));
     expect(responses.map(response => response.status)).toEqual([206, 206, 206]);
     expect(responses.map(response => Buffer.from(response.body).toString())).toEqual(['0123', '4567', 'wxyz']);
     expect(responses[0].headers).toMatchObject({ 'accept-ranges': 'bytes', 'content-range': `bytes 0-3/${fs.statSync(mediaFile).size}`, 'content-length': '4' });
@@ -52,7 +52,7 @@ describe('beveiligde playbackroutes', () => {
 
   it('geeft bij HEAD dezelfde rangeheaders maar geen body', async () => {
     const { token } = sessionToken();
-    const response = await request(app).head(`/api/playback/${mediaId}/file?token=${encodeURIComponent(token)}`).set('Range', 'bytes=2-5');
+    const response = await request(app).head(`/api/playback/${mediaId}/file.mp4?token=${encodeURIComponent(token)}`).set('Range', 'bytes=2-5');
     expect(response.status).toBe(206);
     expect(response.headers).toMatchObject({ 'content-length': '4', 'content-range': `bytes 2-5/${fs.statSync(mediaFile).size}`, 'cache-control': 'private,no-store', 'referrer-policy': 'no-referrer' });
     expect(response.text).toBeUndefined();
@@ -95,12 +95,25 @@ describe('beveiligde playbackroutes', () => {
     expect(response.status).toBe(200);
     expect(response.headers).toMatchObject({
       'content-type': 'video/mpeg',
+      'accept-ranges': 'none',
       'transfermode.dlna.org': 'Streaming',
       'timeseekrange.dlna.org': 'npt=12.500-100.000/100.000',
     });
     expect(response.headers['contentfeatures.dlna.org']).toContain('DLNA.ORG_OP=10');
     expect(playbackRouteInternals.dlnaTimeSeekSeconds('npt=75.25-')).toBe(75.25);
     expect(playbackRouteInternals.dlnaTimeSeekSeconds('ongeldig')).toBe(0);
+  });
+
+  it('gebruikt de hervatpositie uit de grant wanneer Samsung nog geen TimeSeekRange meestuurt', async () => {
+    database.db.prepare('UPDATE media_items SET duration=1000 WHERE id=?').run(mediaId);
+    try {
+      const { token } = dlnaToken(8 * 60 + 3);
+      const response = await request(app).head(`/api/playback/${mediaId}/dlna.ts?token=${encodeURIComponent(token)}`);
+      expect(response.status).toBe(200);
+      expect(response.headers['timeseekrange.dlna.org']).toBe('npt=483.000-1000.000/1000.000');
+    } finally {
+      database.db.prepare('UPDATE media_items SET duration=100 WHERE id=?').run(mediaId);
+    }
   });
 
   it('maakt een begrensde H.264/AAC-stereo MPEG-TS-opdracht voor DLNA', () => {

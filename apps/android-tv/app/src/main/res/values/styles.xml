@@ -1,1 +1,12 @@
-<resources><style name="Theme.ThuisHub" parent="Theme.AppCompat.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#D9FF3F</item><item name="android:windowBackground">#07110E</item><item name="android:navigationBarColor">#020706</item></style></resources>
+<resources>
+    <style name="Theme.ThuisHub" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#B8FF2C</item>
+        <item name="android:windowBackground">#020A11</item>
+        <item name="android:statusBarColor">#020A11</item>
+        <item name="android:navigationBarColor">#020A11</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+</resources>

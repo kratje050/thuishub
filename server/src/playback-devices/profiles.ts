@@ -20,8 +20,8 @@ export const DEVICE_CAPABILITY_PROFILES: Record<string, DeviceCapabilities> = {
 
 export function capabilityProfileFor(input: { protocol: PlaybackDeviceProtocol; manufacturer?: string; model?: string; platform?: string }) {
   const text = `${input.manufacturer || ''} ${input.model || ''} ${input.platform || ''}`.toLowerCase();
+  if (input.protocol === 'samsung-tizen' || /samsung|tizen|qe65qef1auxxn/.test(text)) return DEVICE_CAPABILITY_PROFILES['samsung-tizen'];
   if (input.protocol === 'dlna-upnp') return DEVICE_CAPABILITY_PROFILES['dlna-generic'];
-  if (input.protocol === 'samsung-tizen' || /samsung|tizen/.test(text)) return DEVICE_CAPABILITY_PROFILES['samsung-tizen'];
   if (input.protocol === 'android-tv') return DEVICE_CAPABILITY_PROFILES['android-tv'];
   if (input.protocol === 'thuishub-tv-app') return DEVICE_CAPABILITY_PROFILES['thuishub-tv-app'];
   if (input.protocol === 'google-cast') {

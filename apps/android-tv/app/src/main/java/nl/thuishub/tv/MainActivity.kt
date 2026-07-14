@@ -5,6 +5,11 @@ import android.app.UiModeManager
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.media.MediaCodecList
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -15,6 +20,10 @@ import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Build
 import android.provider.Settings as AndroidSettings
+import android.text.Editable
+import android.text.TextUtils
+import android.text.TextWatcher
+import android.util.LruCache
 import android.view.Display
 import android.view.Gravity
 import android.view.View
@@ -24,6 +33,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.GridLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -32,6 +42,9 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.FileProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -39,6 +52,8 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -72,10 +87,21 @@ class MainActivity : ComponentActivity() {
         private const val SERVICE_TYPE = "_thuishub._tcp."
         private const val DISCOVERY_PORT = 8789
         private const val DISCOVERY_REQUEST = "THUISHUB_DISCOVER_V1"
-        private const val APP_VERSION = "1.2.16"
+        private const val APP_VERSION = "1.2.17"
         private const val UPDATE_MANIFEST_URL = "https://github.com/kratje050/thuishub/releases/latest/download/latest.json"
         private const val MAX_MANIFEST_BYTES = 256 * 1024
         private const val MAX_APK_BYTES = 200L * 1024 * 1024
+        private const val MAX_POSTER_BYTES = 12 * 1024 * 1024
+        private val COLOR_BACKGROUND = 0xff020a11.toInt()
+        private val COLOR_SURFACE = 0xff071721.toInt()
+        private val COLOR_CARD = 0xff0b1d2a.toInt()
+        private val COLOR_CARD_ACTIVE = 0xff142b28.toInt()
+        private val COLOR_BORDER = 0xff203746.toInt()
+        private val COLOR_TEXT = 0xfff5f7f8.toInt()
+        private val COLOR_SECONDARY = 0xffa9b7c0.toInt()
+        private val COLOR_MUTED = 0xff70838f.toInt()
+        private val COLOR_LIME = 0xffb8ff2c.toInt()
+        private val COLOR_CYAN = 0xff35d4d2.toInt()
     }
 
     private lateinit var root: FrameLayout
@@ -108,6 +134,13 @@ class MainActivity : ComponentActivity() {
     private var updateDialogProgress: ProgressBar? = null
     private var updateDialogStatus: TextView? = null
     private var updateDialogBytes: TextView? = null
+    private var libraryItems: List<LibraryItem> = emptyList()
+    private val posterSemaphore = Semaphore(4)
+    private val posterCache by lazy {
+        object : LruCache<String, Bitmap>((Runtime.getRuntime().maxMemory() / 1024 / 12).toInt().coerceIn(12 * 1024, 48 * 1024)) {
+            override fun sizeOf(key: String, value: Bitmap) = value.byteCount / 1024
+        }
+    }
     private val resolving = mutableSetOf<String>()
     private val executedCommandIds = mutableSetOf<Long>()
     private val preferences by lazy { getSharedPreferences("thuishub", MODE_PRIVATE) }
@@ -125,8 +158,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        root = FrameLayout(this)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = COLOR_BACKGROUND
+        window.navigationBarColor = COLOR_BACKGROUND
+        root = FrameLayout(this).apply { setBackgroundColor(COLOR_BACKGROUND) }
         setContentView(root)
+        WindowCompat.getInsetsController(window, root).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
         nsdManager = getSystemService(Context.NSD_SERVICE) as NsdManager
         showHome()
         if (automaticConnectionEnabled) root.post { startConnection(showProgressScreen = false) }
@@ -135,11 +180,12 @@ class MainActivity : ComponentActivity() {
 
     private fun newScreenColumn(): LinearLayout {
         val horizontalPadding = dp(if (isTelevision) 48 else 20)
-        val verticalPadding = dp(if (isTelevision) 32 else 20)
+        val verticalPadding = dp(if (isTelevision) 32 else 18)
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
+            gravity = Gravity.TOP
             setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding)
+            setBackgroundColor(COLOR_BACKGROUND)
         }
     }
 
@@ -149,7 +195,13 @@ class MainActivity : ComponentActivity() {
             isFillViewport = true
             addView(column, ViewGroup.LayoutParams(-1, -1))
         }
-        root.addView(scroll, FrameLayout.LayoutParams(-1, -1))
+        val shell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(COLOR_BACKGROUND)
+            addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+            addView(bottomNavigation(), LinearLayout.LayoutParams(-1, dp(if (isTelevision) 72 else 64)))
+        }
+        root.addView(shell, FrameLayout.LayoutParams(-1, -1))
     }
 
     private fun addNavigation(column: LinearLayout, screenTitle: String, includeHome: Boolean = true) {
@@ -158,25 +210,131 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(TextView(this).apply {
-            text = screenTitle
-            textSize = if (isTelevision) 28f else 23f
-            setTextColor(0xffffffff.toInt())
+            text = if (includeHome) "‹" else "⌂"
+            textSize = if (isTelevision) 30f else 27f
+            gravity = Gravity.CENTER
+            setTextColor(COLOR_LIME)
+            typeface = Typeface.DEFAULT_BOLD
+            background = roundedBackground(COLOR_CARD_ACTIVE, 14, COLOR_BORDER)
+            isClickable = includeHome
+            isFocusable = includeHome
+            if (includeHome) setOnClickListener { showHome() }
+        }, LinearLayout.LayoutParams(dp(if (isTelevision) 54 else 44), dp(if (isTelevision) 54 else 44)).apply { marginEnd = dp(12) })
+        header.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = screenTitle
+                textSize = if (isTelevision) 25f else 21f
+                setTextColor(COLOR_TEXT)
+                typeface = Typeface.DEFAULT_BOLD
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = if (server.isNotBlank() && token.isNotBlank()) "● Verbonden" else "ThuisHub Android"
+                textSize = 12f
+                setTextColor(if (server.isNotBlank() && token.isNotBlank()) COLOR_CYAN else COLOR_MUTED)
+            })
         }, LinearLayout.LayoutParams(0, -2, 1f))
-        if (includeHome) header.addView(Button(this).apply {
-            text = "Home"
-            isAllCaps = false
-            setOnClickListener { showHome() }
-        })
-        header.addView(Button(this).apply {
-            text = "Instellingen"
-            isAllCaps = false
-            isEnabled = currentScreen != AppScreen.SETTINGS
+        if (currentScreen != AppScreen.SETTINGS) header.addView(TextView(this).apply {
+            text = "⚙"
+            textSize = 22f
+            gravity = Gravity.CENTER
+            setTextColor(COLOR_SECONDARY)
+            background = roundedBackground(COLOR_SURFACE, 14, COLOR_BORDER)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Instellingen"
             setOnClickListener { showSettings() }
-        })
+        }, LinearLayout.LayoutParams(dp(if (isTelevision) 54 else 44), dp(if (isTelevision) 54 else 44)))
         column.addView(header, LinearLayout.LayoutParams(-1, -2))
     }
 
-    private fun showHome() {
+    private fun roundedBackground(fill: Int, radiusDp: Int = 18, stroke: Int = Color.TRANSPARENT, strokeDp: Int = 1) =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(fill)
+            cornerRadius = dp(radiusDp).toFloat()
+            if (stroke != Color.TRANSPARENT) setStroke(dp(strokeDp), stroke)
+        }
+
+    private fun gradientBackground() = GradientDrawable(
+        GradientDrawable.Orientation.TL_BR,
+        intArrayOf(0xff173a37.toInt(), 0xff0a2030.toInt(), COLOR_CARD),
+    ).apply { cornerRadius = dp(17).toFloat() }
+
+    private fun spacer(heightDp: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(1, dp(heightDp)) }
+
+    private fun sectionLabel(value: String) = TextView(this).apply {
+        text = value.uppercase()
+        textSize = 12f
+        letterSpacing = .12f
+        setTextColor(COLOR_LIME)
+        typeface = Typeface.DEFAULT_BOLD
+    }
+
+    private fun bodyText(value: String, size: Float = 15f, color: Int = COLOR_SECONDARY) = TextView(this).apply {
+        text = value
+        textSize = size
+        setTextColor(color)
+        setLineSpacing(0f, 1.12f)
+    }
+
+    private fun card(paddingDp: Int = 18) = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(paddingDp), dp(paddingDp), dp(paddingDp), dp(paddingDp))
+        background = roundedBackground(COLOR_SURFACE, 20, COLOR_BORDER)
+    }
+
+    private fun actionButton(label: String, primary: Boolean = false, destructive: Boolean = false, action: () -> Unit) = TextView(this).apply {
+        text = label
+        textSize = if (isTelevision) 17f else 15f
+        gravity = Gravity.CENTER
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(if (primary) COLOR_BACKGROUND else if (destructive) 0xffff9b9b.toInt() else COLOR_TEXT)
+        minHeight = dp(if (isTelevision) 58 else 50)
+        setPadding(dp(14), dp(12), dp(14), dp(12))
+        background = roundedBackground(if (primary) COLOR_LIME else COLOR_CARD, 15, if (primary) COLOR_LIME else if (destructive) 0xff7c3c42.toInt() else COLOR_BORDER)
+        isClickable = true
+        isFocusable = true
+        setOnClickListener { action() }
+        setOnFocusChangeListener { _, focused ->
+            if (focused) background = roundedBackground(if (primary) 0xffcaff58.toInt() else COLOR_CARD_ACTIVE, 15, COLOR_LIME, 2)
+            else background = roundedBackground(if (primary) COLOR_LIME else COLOR_CARD, 15, if (primary) COLOR_LIME else if (destructive) 0xff7c3c42.toInt() else COLOR_BORDER)
+        }
+    }
+
+    private fun bottomNavigation(): View {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(7), dp(8), dp(7))
+            background = roundedBackground(0xf2071721.toInt(), 0, COLOR_BORDER)
+        }
+        val entries = listOf(
+            Triple("⌂\nHome", AppScreen.HOME) { showHome() },
+            Triple("▦\nBibliotheek", AppScreen.LIBRARY) { if (token.isNotBlank()) showLibrary() else startConnection(true) },
+            Triple("↻\nUpdates", AppScreen.UPDATES) { showUpdates() },
+            Triple("⚙\nInstellingen", AppScreen.SETTINGS) { showSettings() },
+        )
+        entries.forEach { (label, screen, action) ->
+            val selected = currentScreen == screen
+            bar.addView(TextView(this).apply {
+                text = label
+                textSize = if (isTelevision) 13f else 11f
+                gravity = Gravity.CENTER
+                setTextColor(if (selected) COLOR_LIME else COLOR_MUTED)
+                typeface = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                background = if (selected) roundedBackground(COLOR_CARD_ACTIVE, 13) else null
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { action() }
+            }, LinearLayout.LayoutParams(0, -1, 1f).apply { setMargins(dp(2), 0, dp(2), 0) })
+        }
+        return bar
+    }
+
+    private fun legacyShowHome() {
         currentScreen = AppScreen.HOME
         pairingCode = null
         updateScreenStatus = null
@@ -235,7 +393,7 @@ class MainActivity : ComponentActivity() {
         renderColumn(column)
     }
 
-    private fun showSettings() {
+    private fun legacyShowSettings() {
         currentScreen = AppScreen.SETTINGS
         pairingCode = null
         updateScreenStatus = null
@@ -324,7 +482,7 @@ class MainActivity : ComponentActivity() {
         renderColumn(column)
     }
 
-    private fun showUpdates() {
+    private fun legacyShowUpdates() {
         currentScreen = AppScreen.UPDATES
         pairingCode = null
         val column = newScreenColumn()
@@ -385,7 +543,7 @@ class MainActivity : ComponentActivity() {
         renderColumn(column)
     }
 
-    private fun showPairing() {
+    private fun legacyShowPairing() {
         currentScreen = AppScreen.CONNECTING
         updateScreenStatus = null
         val column = newScreenColumn()
@@ -455,6 +613,292 @@ class MainActivity : ComponentActivity() {
                 showHome()
             }
         }, LinearLayout.LayoutParams(-1, -2))
+        renderColumn(column)
+    }
+
+    private fun showHome() {
+        currentScreen = AppScreen.HOME
+        pairingCode = null
+        updateScreenStatus = null
+        val column = newScreenColumn()
+        addNavigation(column, "ThuisHub", includeHome = false)
+        column.addView(spacer(if (isTelevision) 46 else 34))
+        column.addView(sectionLabel("Jouw eigen mediathuis"))
+        column.addView(TextView(this).apply {
+            text = if (server.isNotBlank() && token.isNotBlank()) "Alles klaar voor filmavond" else "Je media. Jouw scherm."
+            textSize = if (isTelevision) 38f else 31f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.DEFAULT_BOLD
+            setLineSpacing(0f, .96f)
+            setPadding(0, dp(8), 0, dp(10))
+        })
+        column.addView(bodyText("Open je persoonlijke bibliotheek, speel direct af en bedien ThuisHub vanaf ieder gekoppeld scherm.", if (isTelevision) 18f else 16f))
+        column.addView(spacer(24))
+
+        val connectionCard = card().apply { background = gradientBackground() }
+        connectionCard.addView(sectionLabel(if (server.isNotBlank() && token.isNotBlank()) "● Online" else "○ Nog niet verbonden"))
+        connectionCard.addView(TextView(this).apply {
+            text = if (server.isNotBlank() && token.isNotBlank()) "ThuisHub is verbonden" else "Koppel je ThuisHub-pc"
+            textSize = if (isTelevision) 26f else 22f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(8), 0, dp(6))
+        })
+        screenStatus = bodyText(when {
+            lastConnectionStatus.isNotBlank() -> lastConnectionStatus
+            server.isNotBlank() && token.isNotBlank() -> "Gekoppeld met $server"
+            server.isNotBlank() -> "Server opgeslagen. Rond de veilige koppeling nog af."
+            else -> "Zoek automatisch op je thuisnetwerk of voeg het pc-adres handmatig toe."
+        }).apply { setPadding(0, 0, 0, dp(18)) }
+        connectionCard.addView(screenStatus)
+        connectionCard.addView(actionButton(when {
+            pairingInProgress -> "Lopende koppeling bekijken"
+            server.isNotBlank() && token.isNotBlank() -> "Bibliotheek openen"
+            else -> "ThuisHub zoeken en koppelen"
+        }, primary = true) {
+            when {
+                pairingInProgress -> showPairing()
+                server.isNotBlank() && token.isNotBlank() -> showLibrary()
+                else -> startConnection(showProgressScreen = true)
+            }
+        })
+        column.addView(connectionCard, LinearLayout.LayoutParams(-1, -2))
+        column.addView(spacer(14))
+
+        val quickActions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        quickActions.addView(actionButton("App-updates") { showUpdates() }, LinearLayout.LayoutParams(0, -2, 1f))
+        quickActions.addView(View(this), LinearLayout.LayoutParams(dp(10), 1))
+        quickActions.addView(actionButton("Instellingen") { showSettings() }, LinearLayout.LayoutParams(0, -2, 1f))
+        column.addView(quickActions, LinearLayout.LayoutParams(-1, -2))
+        column.addView(spacer(16))
+        column.addView(card(15).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(TextView(this@MainActivity).apply {
+                text = "✦"
+                textSize = 23f
+                setTextColor(COLOR_CYAN)
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(dp(38), -2))
+            addView(bodyText(if (automaticConnectionEnabled) "Automatisch verbinden staat aan" else "Automatisch verbinden staat uit", 14f), LinearLayout.LayoutParams(0, -2, 1f))
+        })
+        renderColumn(column)
+    }
+
+    private fun showSettings() {
+        currentScreen = AppScreen.SETTINGS
+        pairingCode = null
+        updateScreenStatus = null
+        val column = newScreenColumn()
+        addNavigation(column, "Instellingen")
+        column.addView(spacer(28))
+        column.addView(sectionLabel("Verbinding"))
+        column.addView(TextView(this).apply {
+            text = "Koppeling met je pc"
+            textSize = if (isTelevision) 30f else 25f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(7), 0, dp(16))
+        })
+
+        val automaticCard = card()
+        automaticCard.addView(SwitchCompat(this).apply {
+            text = "Automatisch zoeken en verbinden"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_TEXT)
+            isChecked = automaticConnectionEnabled
+            setPadding(0, 0, 0, dp(8))
+            setOnCheckedChangeListener { _, enabled ->
+                preferences.edit().putBoolean("automaticConnectionEnabled", enabled).apply()
+                if (!enabled) stopConnectionAttempt()
+                lastConnectionStatus = if (enabled) "Automatisch verbinden staat aan." else "Automatisch verbinden staat uit."
+                screenStatus?.text = lastConnectionStatus
+            }
+        })
+        automaticCard.addView(bodyText("De app controleert eerst de opgeslagen server en zoekt daarna veilig op je thuisnetwerk.", 14f))
+        column.addView(automaticCard, LinearLayout.LayoutParams(-1, -2))
+        column.addView(spacer(12))
+
+        val statusCard = card()
+        statusCard.addView(sectionLabel(if (server.isBlank()) "Niet gekoppeld" else "Opgeslagen server"))
+        screenStatus = bodyText(if (lastConnectionStatus.isNotBlank()) lastConnectionStatus else if (server.isBlank()) "Er is nog geen server opgeslagen." else server, 15f, COLOR_TEXT).apply {
+            setPadding(0, dp(8), 0, dp(14))
+        }
+        statusCard.addView(screenStatus)
+        statusCard.addView(actionButton("Nu zoeken en koppelen", primary = true) { startConnection(showProgressScreen = true) })
+        if (pairingInProgress) {
+            statusCard.addView(spacer(8))
+            statusCard.addView(actionButton("Lopende koppeling bekijken") { showPairing() })
+        }
+        column.addView(statusCard, LinearLayout.LayoutParams(-1, -2))
+        column.addView(spacer(12))
+
+        val manualCard = card()
+        manualCard.addView(sectionLabel("Geavanceerd"))
+        manualCard.addView(TextView(this).apply {
+            text = "Handmatig serveradres"
+            textSize = 19f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(7), 0, dp(5))
+        })
+        manualCard.addView(bodyText("Gebruik dit alleen wanneer automatisch zoeken de pc niet vindt.", 13f))
+        manualCard.addView(spacer(12))
+        val manualAddress = EditText(this).apply {
+            hint = "http://192.168.1.10:8788"
+            setText(server)
+            textSize = 15f
+            setTextColor(COLOR_TEXT)
+            setHintTextColor(COLOR_MUTED)
+            minWidth = 0
+            setSingleLine(true)
+            setPadding(dp(14), dp(13), dp(14), dp(13))
+            background = roundedBackground(COLOR_BACKGROUND, 13, COLOR_BORDER)
+        }
+        manualCard.addView(manualAddress, LinearLayout.LayoutParams(-1, -2))
+        manualCard.addView(spacer(9))
+        manualCard.addView(actionButton("Handmatig verbinden") { connectManually(manualAddress.text.toString()) })
+        if (server.isNotBlank()) {
+            manualCard.addView(spacer(9))
+            manualCard.addView(actionButton("Opgeslagen verbinding vergeten", destructive = true) {
+                stopConnectionAttempt()
+                commandJob?.cancel()
+                commandJob = null
+                preferences.edit().remove("server").remove("deviceToken").apply()
+                serverConfirmed = false
+                lastConnectionStatus = "De opgeslagen verbinding is verwijderd."
+                showSettings()
+            })
+        }
+        column.addView(manualCard, LinearLayout.LayoutParams(-1, -2))
+        column.addView(spacer(12))
+        column.addView(actionButton("App-updates openen") { showUpdates() })
+        column.addView(spacer(12))
+        column.addView(bodyText("Een nieuwe koppeling moet altijd met de zescijferige code op de pc worden goedgekeurd.", 12f, COLOR_MUTED))
+        renderColumn(column)
+    }
+
+    private fun showUpdates() {
+        currentScreen = AppScreen.UPDATES
+        pairingCode = null
+        val column = newScreenColumn()
+        addNavigation(column, "App-updates")
+        column.addView(spacer(30))
+        column.addView(sectionLabel("Veilig en rechtstreeks"))
+        column.addView(TextView(this).apply {
+            text = "ThuisHub bijwerken"
+            textSize = if (isTelevision) 34f else 28f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(8), 0, dp(18))
+        })
+        val updateCard = card().apply { background = gradientBackground() }
+        updateCard.addView(sectionLabel("Huidige versie"))
+        updateCard.addView(TextView(this).apply {
+            text = APP_VERSION
+            textSize = 30f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(6), 0, dp(8))
+        })
+        updateScreenStatus = bodyText(lastUpdateStatus, 15f).apply { setPadding(0, 0, 0, dp(16)) }
+        updateCard.addView(updateScreenStatus)
+        updateCard.addView(actionButton("Controleren op updates", primary = true) { checkForAndroidUpdate() }.apply {
+            isEnabled = updateJob?.isActive != true
+            alpha = if (isEnabled) 1f else .55f
+        })
+        column.addView(updateCard, LinearLayout.LayoutParams(-1, -2))
+        availableUpdate?.takeIf { compareVersions(it.version, APP_VERSION) > 0 }?.let { update ->
+            column.addView(spacer(12))
+            val availableCard = card()
+            availableCard.addView(sectionLabel("Update beschikbaar"))
+            availableCard.addView(TextView(this).apply {
+                text = "Versie ${update.version}"
+                textSize = 21f
+                setTextColor(COLOR_TEXT)
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dp(7), 0, dp(14))
+            })
+            val downloaded = downloadedUpdateFile?.takeIf { it.isFile }
+            availableCard.addView(actionButton(if (downloaded == null) "Update ophalen" else "Update installeren", primary = true) {
+                if (downloaded == null) downloadAndroidUpdate(update) else launchApkInstaller(downloaded)
+            }.apply {
+                isEnabled = updateJob?.isActive != true
+                alpha = if (isEnabled) 1f else .55f
+            })
+            column.addView(availableCard, LinearLayout.LayoutParams(-1, -2))
+        }
+        column.addView(spacer(16))
+        column.addView(card(15).apply {
+            addView(sectionLabel("Integriteitscontrole"))
+            addView(bodyText("Updates komen rechtstreeks van GitHub Releases en worden vóór installatie met SHA-256 gecontroleerd. Hiervoor is geen pc-koppeling nodig.", 13f).apply { setPadding(0, dp(7), 0, 0) })
+        })
+        renderColumn(column)
+    }
+
+    private fun showPairing() {
+        currentScreen = AppScreen.CONNECTING
+        updateScreenStatus = null
+        val column = newScreenColumn()
+        addNavigation(column, "ThuisHub koppelen")
+        column.addView(spacer(30))
+        val pairingCard = card().apply { background = gradientBackground() }
+        pairingCard.addView(sectionLabel("Veilige koppeling"))
+        pairingCard.addView(TextView(this).apply {
+            text = "Verbinden met je ThuisHub"
+            textSize = if (isTelevision) 32f else 26f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(8), 0, dp(8))
+        })
+        screenStatus = bodyText(if (lastConnectionStatus.isNotBlank()) lastConnectionStatus else "ThuisHub wordt op je thuisnetwerk gezocht…", 16f).apply {
+            setPadding(0, 0, 0, dp(10))
+        }
+        pairingCode = TextView(this).apply {
+            text = lastPairingCode
+            textSize = if (isTelevision) 58f else 44f
+            letterSpacing = .22f
+            setTextColor(COLOR_LIME)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setPadding(0, dp(8), 0, dp(12))
+        }
+        val manualAddress = EditText(this).apply {
+            hint = "http://192.168.1.10:8788"
+            setText(server)
+            setTextColor(COLOR_TEXT)
+            setHintTextColor(COLOR_MUTED)
+            minWidth = 0
+            setSingleLine(true)
+            visibility = View.GONE
+            setPadding(dp(14), dp(13), dp(14), dp(13))
+            background = roundedBackground(COLOR_BACKGROUND, 13, COLOR_BORDER)
+        }
+        val manualConnect = actionButton("Handmatig verbinden") { connectManually(manualAddress.text.toString()) }.apply { visibility = View.GONE }
+        val advanced = actionButton("Geavanceerd: handmatig adres") {
+            val visible = manualAddress.visibility != View.VISIBLE
+            manualAddress.visibility = if (visible) View.VISIBLE else View.GONE
+            manualConnect.visibility = if (visible) View.VISIBLE else View.GONE
+            if (visible) manualAddress.requestFocus()
+        }
+        pairingCard.addView(screenStatus)
+        pairingCard.addView(pairingCode)
+        pairingCard.addView(advanced)
+        pairingCard.addView(spacer(9))
+        pairingCard.addView(manualAddress, LinearLayout.LayoutParams(-1, -2))
+        pairingCard.addView(manualConnect, LinearLayout.LayoutParams(-1, -2))
+        column.addView(pairingCard, LinearLayout.LayoutParams(-1, -2))
+        column.addView(spacer(12))
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        actions.addView(actionButton("App-updates") { showUpdates() }, LinearLayout.LayoutParams(0, -2, 1f))
+        actions.addView(View(this), LinearLayout.LayoutParams(dp(10), 1))
+        actions.addView(actionButton("Annuleren", destructive = true) {
+            stopConnectionAttempt()
+            lastConnectionStatus = "Koppelen geannuleerd."
+            showHome()
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        column.addView(actions)
         renderColumn(column)
     }
 
@@ -1147,7 +1591,7 @@ class MainActivity : ComponentActivity() {
         updateStatus("De koppelcode is verlopen. Start opnieuw.")
     }
 
-    private fun showLibrary() {
+    private fun legacyShowLibrary() {
         if (token.isBlank()) { showPairing(); beginPairing(); return }
         currentScreen = AppScreen.LIBRARY
         updateScreenStatus = null
@@ -1230,6 +1674,280 @@ class MainActivity : ComponentActivity() {
                 } else showToast(error.message)
             } catch (error: Exception) { showToast(error.message) }
         }
+    }
+
+    private fun showLibrary() {
+        if (token.isBlank()) { showPairing(); beginPairing(); return }
+        currentScreen = AppScreen.LIBRARY
+        updateScreenStatus = null
+        screenStatus = null
+        pairingCode = null
+        root.removeAllViews()
+
+        val screenWidthDp = resources.configuration.screenWidthDp.coerceAtLeast(320)
+        val columns = if (isTelevision) 5 else when {
+            screenWidthDp >= 840 -> 5
+            screenWidthDp >= 600 -> 4
+            else -> 2
+        }
+        val shell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(COLOR_BACKGROUND)
+        }
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(if (isTelevision) 42 else 16), dp(if (isTelevision) 26 else 14), dp(if (isTelevision) 42 else 16), dp(10))
+        }
+        addNavigation(top, "Bibliotheek")
+        top.addView(spacer(16))
+        val search = EditText(this).apply {
+            hint = "Zoek films, series en afleveringen…"
+            textSize = if (isTelevision) 17f else 15f
+            setSingleLine(true)
+            setTextColor(COLOR_TEXT)
+            setHintTextColor(COLOR_MUTED)
+            setPadding(dp(16), dp(13), dp(16), dp(13))
+            background = roundedBackground(COLOR_SURFACE, 16, COLOR_BORDER)
+        }
+        top.addView(search, LinearLayout.LayoutParams(-1, -2))
+        top.addView(spacer(16))
+        val sectionRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        sectionRow.addView(TextView(this).apply {
+            text = "Alle media"
+            textSize = if (isTelevision) 24f else 20f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.DEFAULT_BOLD
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        val libraryStatus = TextView(this).apply {
+            text = if (libraryItems.isEmpty()) "Bibliotheek laden…" else "${libraryItems.size} titels"
+            textSize = 13f
+            setTextColor(COLOR_CYAN)
+            gravity = Gravity.END
+        }
+        sectionRow.addView(libraryStatus, LinearLayout.LayoutParams(-2, -2))
+        top.addView(sectionRow, LinearLayout.LayoutParams(-1, -2))
+        shell.addView(top, LinearLayout.LayoutParams(-1, -2))
+
+        val adapter = LibraryAdapter { item -> lifecycleScope.launch { playMedia(item.id) } }
+        adapter.submit(libraryItems)
+        val list = RecyclerView(this).apply {
+            layoutManager = GridLayoutManager(this@MainActivity, columns)
+            this.adapter = adapter
+            setHasFixedSize(true)
+            clipToPadding = false
+            setPadding(dp(if (isTelevision) 34 else 10), 0, dp(if (isTelevision) 34 else 10), dp(14))
+            setBackgroundColor(COLOR_BACKGROUND)
+        }
+        shell.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
+        shell.addView(bottomNavigation(), LinearLayout.LayoutParams(-1, dp(if (isTelevision) 72 else 64)))
+        root.addView(shell, FrameLayout.LayoutParams(-1, -1))
+
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(value: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(value: CharSequence?, start: Int, before: Int, count: Int) { adapter.filter(value?.toString().orEmpty()) }
+            override fun afterTextChanged(value: Editable?) = Unit
+        })
+
+        lifecycleScope.launch {
+            try {
+                val values = getArray("/api/device/library")
+                libraryItems = (0 until values.length()).map { index ->
+                    val item = values.getJSONObject(index)
+                    LibraryItem(
+                        id = item.getInt("id"),
+                        kind = item.optString("kind"),
+                        title = item.optString("title").ifBlank { "Naamloos" },
+                        seriesTitle = item.optString("seriesTitle"),
+                        season = item.optInt("season"),
+                        episode = item.optInt("episode"),
+                        year = item.optInt("year"),
+                        width = item.optInt("width"),
+                        hdrType = item.optString("hdrType"),
+                        atmos = item.optBoolean("atmos"),
+                        posterUrl = item.optString("posterUrl"),
+                    )
+                }
+                libraryStatus.text = if (libraryItems.isEmpty()) "Nog geen media" else "${libraryItems.size} titels"
+                adapter.submit(libraryItems)
+            } catch (error: HttpFailure) {
+                if (error.status == 401) {
+                    preferences.edit().remove("deviceToken").apply()
+                    showPairing()
+                    beginPairing()
+                } else showToast(error.message)
+            } catch (error: Exception) { showToast(error.message) }
+        }
+    }
+
+    private inner class LibraryHolder(
+        val container: LinearLayout,
+        val poster: ImageView,
+        val title: TextView,
+        val metadata: TextView,
+        val quality: TextView,
+    ) : RecyclerView.ViewHolder(container)
+
+    private inner class LibraryAdapter(private val select: (LibraryItem) -> Unit) : RecyclerView.Adapter<LibraryHolder>() {
+        private var source: List<LibraryItem> = emptyList()
+        private var visible: List<LibraryItem> = emptyList()
+        private var query = ""
+
+        fun submit(items: List<LibraryItem>) {
+            source = items
+            applyFilter()
+        }
+
+        fun filter(value: String) {
+            query = value.trim()
+            applyFilter()
+        }
+
+        private fun applyFilter() {
+            visible = if (query.isBlank()) source else source.filter {
+                it.title.contains(query, ignoreCase = true) || it.seriesTitle.contains(query, ignoreCase = true)
+            }
+            notifyDataSetChanged()
+        }
+
+        override fun getItemCount() = visible.size
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): LibraryHolder {
+            val container = LinearLayout(parent.context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(1), dp(1), dp(1), dp(12))
+                background = roundedBackground(COLOR_CARD, 18, COLOR_BORDER)
+                isFocusable = true
+                isClickable = true
+                clipToOutline = true
+                layoutParams = RecyclerView.LayoutParams(-1, -2).apply { setMargins(dp(6), dp(6), dp(6), dp(8)) }
+            }
+            val poster = ImageView(parent.context).apply {
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                setImageResource(nl.thuishub.tv.R.mipmap.ic_launcher)
+                setPadding(dp(42), dp(42), dp(42), dp(42))
+                background = gradientBackground()
+                clipToOutline = true
+                contentDescription = "Poster"
+            }
+            container.addView(poster, LinearLayout.LayoutParams(-1, dp(if (isTelevision) 238 else 196)))
+            val title = TextView(parent.context).apply {
+                textSize = if (isTelevision) 17f else 15f
+                setTextColor(COLOR_TEXT)
+                typeface = Typeface.DEFAULT_BOLD
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+                minHeight = dp(if (isTelevision) 50 else 43)
+                setPadding(dp(12), dp(11), dp(12), 0)
+            }
+            container.addView(title, LinearLayout.LayoutParams(-1, -2))
+            val metadata = TextView(parent.context).apply {
+                textSize = 12f
+                setTextColor(COLOR_SECONDARY)
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(dp(12), dp(2), dp(12), 0)
+            }
+            container.addView(metadata, LinearLayout.LayoutParams(-1, -2))
+            val quality = TextView(parent.context).apply {
+                textSize = 10f
+                letterSpacing = .06f
+                setTextColor(COLOR_LIME)
+                typeface = Typeface.DEFAULT_BOLD
+                maxLines = 1
+                setPadding(dp(12), dp(5), dp(12), 0)
+            }
+            container.addView(quality, LinearLayout.LayoutParams(-1, -2))
+            return LibraryHolder(container, poster, title, metadata, quality)
+        }
+
+        override fun onBindViewHolder(holder: LibraryHolder, position: Int) {
+            val item = visible[position]
+            holder.title.text = if (item.kind == "episode") item.seriesTitle.ifBlank { item.title } else item.title
+            holder.metadata.text = when {
+                item.kind == "episode" -> "S${item.season.toString().padStart(2, '0')}  ·  A${item.episode.toString().padStart(2, '0')}"
+                item.year > 0 -> item.year.toString()
+                else -> "Film"
+            }
+            holder.quality.text = buildList {
+                if (item.width >= 3800) add("4K") else if (item.width >= 1900) add("HD")
+                if (item.hdrType.isNotBlank() && item.hdrType.lowercase() != "sdr") add(item.hdrType.uppercase())
+                if (item.atmos) add("ATMOS")
+            }.joinToString("  ·  ").ifBlank { "THUISHUB" }
+            holder.container.contentDescription = "${holder.title.text}, ${holder.metadata.text}"
+            holder.container.setOnClickListener { select(item) }
+            holder.container.setOnFocusChangeListener { _, focused ->
+                holder.container.background = roundedBackground(if (focused) COLOR_CARD_ACTIVE else COLOR_CARD, 18, if (focused) COLOR_LIME else COLOR_BORDER, if (focused) 2 else 1)
+                holder.container.scaleX = if (focused && isTelevision) 1.035f else 1f
+                holder.container.scaleY = if (focused && isTelevision) 1.035f else 1f
+            }
+            bindPoster(holder.poster, item.posterUrl)
+        }
+    }
+
+    private fun bindPoster(target: ImageView, relativeUrl: String) {
+        val safePath = relativeUrl.takeIf { it.matches(Regex("^/api/device/media/\\d+/artwork$")) }
+        target.tag = safePath.orEmpty()
+        target.scaleType = ImageView.ScaleType.CENTER_INSIDE
+        target.setPadding(dp(42), dp(42), dp(42), dp(42))
+        target.setImageResource(nl.thuishub.tv.R.mipmap.ic_launcher)
+        target.background = gradientBackground()
+        if (safePath == null || server.isBlank() || token.isBlank()) return
+        val key = server + safePath
+        posterCache.get(key)?.let {
+            showPoster(target, safePath, it)
+            return
+        }
+        lifecycleScope.launch {
+            val bitmap = withContext(Dispatchers.IO) {
+                posterSemaphore.withPermit { loadPosterBitmap(safePath) }
+            } ?: return@launch
+            posterCache.put(key, bitmap)
+            showPoster(target, safePath, bitmap)
+        }
+    }
+
+    private fun showPoster(target: ImageView, expectedPath: String, bitmap: Bitmap) {
+        if (target.tag != expectedPath) return
+        target.setPadding(0, 0, 0, 0)
+        target.scaleType = ImageView.ScaleType.CENTER_CROP
+        target.setImageBitmap(bitmap)
+    }
+
+    private fun loadPosterBitmap(relativeUrl: String): Bitmap? {
+        val connection = (URL(server + relativeUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 5_000
+            readTimeout = 10_000
+            setRequestProperty("Authorization", "Device $token")
+            setRequestProperty("Accept", "image/avif,image/webp,image/png,image/jpeg")
+        }
+        return try {
+            if (connection.responseCode !in 200..299) return null
+            val announced = connection.contentLengthLong
+            if (announced > MAX_POSTER_BYTES) return null
+            val output = ByteArrayOutputStream()
+            connection.inputStream.use { input ->
+                val buffer = ByteArray(16 * 1024)
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > MAX_POSTER_BYTES) return null
+                    output.write(buffer, 0, read)
+                }
+            }
+            val bytes = output.toByteArray()
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            var sample = 1
+            while (bounds.outWidth / sample > 720 || bounds.outHeight / sample > 1080) sample *= 2
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inPreferredConfig = Bitmap.Config.RGB_565
+            })
+        } catch (_: Exception) { null }
+        finally { connection.disconnect() }
     }
 
     private suspend fun playMedia(mediaId: Int): Boolean {
@@ -1553,5 +2271,19 @@ class MainActivity : ComponentActivity() {
 private enum class AppScreen { HOME, SETTINGS, UPDATES, CONNECTING, LIBRARY, PLAYER }
 
 private data class AndroidUpdate(val version: String, val tag: String, val assetName: String, val sha256: String)
+
+private data class LibraryItem(
+    val id: Int,
+    val kind: String,
+    val title: String,
+    val seriesTitle: String,
+    val season: Int,
+    val episode: Int,
+    val year: Int,
+    val width: Int,
+    val hdrType: String,
+    val atmos: Boolean,
+    val posterUrl: String,
+)
 
 private class HttpFailure(val status: Int, message: String) : IllegalStateException(message)

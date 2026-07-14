@@ -49,6 +49,9 @@ function serveRange(req: Request, res: Response, file: string, download = false)
   const stat = fs.statSync(file);
   const type = mime.lookup(file) || 'application/octet-stream';
   res.setHeader('Accept-Ranges', 'bytes'); res.setHeader('Content-Type', type);
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('transferMode.dlna.org', 'Streaming');
+  res.setHeader('contentFeatures.dlna.org', 'DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000');
   if (download) res.setHeader('Content-Disposition', `attachment; filename="${path.basename(file).replaceAll('"', '')}"`);
   const range = String(req.headers.range || '');
   if (range) {
@@ -66,7 +69,7 @@ function serveRange(req: Request, res: Response, file: string, download = false)
   return fs.createReadStream(file).pipe(res);
 }
 
-playbackRouter.all('/:id/file', (req, res) => {
+playbackRouter.all(['/:id/file', '/:id/file.mp4'], (req, res) => {
   if (!['GET', 'HEAD'].includes(req.method)) return res.status(405).end();
   if (!cors(req, res)) return res.status(403).json({ error: 'Deze afspeel-origin is niet toegestaan.' });
   if (!grant(req, 'file')) return res.status(401).json({ error: 'De tijdelijke afspeellink is ongeldig of verlopen.' });
@@ -109,7 +112,7 @@ playbackRouter.all('/:id/artwork', (req, res) => {
   serveRange(req, res, item.file);
 });
 
-playbackRouter.all('/:id/dlna', (req, res, next) => {
+playbackRouter.all(['/:id/dlna', '/:id/dlna.ts'], (req, res, next) => {
   try {
     if (!['GET', 'HEAD'].includes(req.method)) return res.status(405).end();
     if (!cors(req, res)) return res.status(403).end();
@@ -121,9 +124,12 @@ playbackRouter.all('/:id/dlna', (req, res, next) => {
     const contentFeatures = 'DLNA.ORG_OP=10;DLNA.ORG_CI=1;DLNA.ORG_FLAGS=01700000000000000000000000000000';
     res.status(200);
     res.setHeader('Content-Type', 'video/mpeg');
+    res.setHeader('Accept-Ranges', 'none');
+    res.setHeader('Connection', 'keep-alive');
     res.setHeader('transferMode.dlna.org', 'Streaming');
     res.setHeader('contentFeatures.dlna.org', contentFeatures);
-    const startSeconds = dlnaTimeSeekSeconds(req.headers['timeseekrange.dlna.org']);
+    const requestedStart = dlnaTimeSeekSeconds(req.headers['timeseekrange.dlna.org']);
+    const startSeconds = requestedStart || Math.max(0, Number(verified.options?.startPosition) || 0);
     const duration = Math.max(0, Number(item.duration) || 0);
     if (duration > 0) res.setHeader('TimeSeekRange.dlna.org', `npt=${startSeconds.toFixed(3)}-${duration.toFixed(3)}/${duration.toFixed(3)}`);
     if (req.method === 'HEAD') return res.end();

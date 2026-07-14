@@ -7,6 +7,7 @@ import { APP_VERSION } from '../../constants.js';
 import { assignedPrivateInterface, isValidIpv4Netmask, sameIpv4Subnet } from '../../network.js';
 import type { DeviceCapabilities } from '../../playback.js';
 import type { PlaybackDiscoveryProvider } from '../discovery-service.js';
+import { capabilityProfileFor } from '../profiles.js';
 
 export const DLNA_SEARCH_TARGETS = [
   'urn:schemas-upnp-org:device:MediaRenderer:1',
@@ -338,13 +339,16 @@ export async function parseDlnaDeviceDescription(xml: string, context: {
 
   const stableId = crypto.createHash('sha256').update(udn.toLowerCase()).digest('hex').slice(0, 32);
   const protocolIds = [...new Set([udn, cleanText(context.usn, 300)].filter(Boolean))];
+  const manufacturer = cleanText(renderer.manufacturer, 100);
+  const model = cleanText(renderer.modelName, 100);
+  const detectedCapabilities = capabilityProfileFor({ protocol: 'dlna-upnp', manufacturer, model });
   const device: DlnaDevice = {
     id: `dlna-${stableId}`,
     name: cleanText(renderer.friendlyName, 100) || 'DLNA MediaRenderer',
     protocol: 'dlna-upnp',
     deviceType: 'television',
-    manufacturer: cleanText(renderer.manufacturer, 100),
-    model: cleanText(renderer.modelName, 100),
+    manufacturer,
+    model,
     modelNumber: cleanText(renderer.modelNumber, 100),
     address: context.sourceAddress,
     interfaceAddress: networkScope?.address,
@@ -353,10 +357,7 @@ export async function parseDlnaDeviceDescription(xml: string, context: {
     online: true,
     lastSeen: (context.now || (() => new Date()))().toISOString(),
     capabilities: {
-      platform: 'dlna', maxWidth: 1_920, maxHeight: 1_080, maxFrameRate: 30, maxBitrateMbps: 20,
-      containers: ['mp4', 'mpegts'], videoCodecs: ['h264'], maxBitDepth: 8, hdrFormats: ['sdr'], dolbyVisionProfiles: [],
-      audioCodecs: ['aac', 'mp3'], maxAudioChannels: 2, passthrough: false, atmos: false, trueHd: false, eac3: false,
-      dts: false, subtitleFormats: ['none'], arc: 'unknown',
+      ...detectedCapabilities,
       play: true, pause: true, stop: true, seek: true, position: true,
       volume: Boolean(endpoints.renderingControl),
       connectionManager: Boolean(endpoints.connectionManager),
@@ -789,7 +790,7 @@ export class DlnaController {
 
   private async soap(service: DlnaServiceEndpoint | undefined, action: string, argumentsXml: string) {
     if (!service) throw new Error(`DLNA-apparaat ondersteunt ${action} niet.`);
-    const requiredKind = action === 'SetVolume' ? 'renderingControl' : 'avTransport';
+    const requiredKind = action === 'SetVolume' ? 'renderingControl' : action === 'GetProtocolInfo' ? 'connectionManager' : 'avTransport';
     if (serviceKind(service.serviceType) !== requiredKind) throw new Error('Onjuist DLNA-servicetype is geweigerd.');
     const envelope = `<?xml version="1.0" encoding="utf-8"?>` +
       `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">` +
@@ -870,6 +871,15 @@ export class DlnaController {
       state: cleanText(findXmlValue(parsed, 'CurrentTransportState'), 80),
       status: cleanText(findXmlValue(parsed, 'CurrentTransportStatus'), 80),
       speed: cleanText(findXmlValue(parsed, 'CurrentSpeed'), 20),
+    };
+  }
+
+  async getProtocolInfo() {
+    const xml = await this.soap(this.device.services.connectionManager, 'GetProtocolInfo', '');
+    const parsed = xml ? parseXml(xml) : {};
+    return {
+      source: cleanText(findXmlValue(parsed, 'Source'), 16_384),
+      sink: cleanText(findXmlValue(parsed, 'Sink'), 16_384),
     };
   }
 

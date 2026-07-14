@@ -17,10 +17,14 @@ describe('privé-LAN-beperking',()=>{
   it('laat op poort 8788 uitsluitend exacte afspeel- en apparaatapp-routes toe',()=>{
     const allowed=network.networkInternals.allowedLanRequest;
     expect(allowed('GET','/api/playback/12/file')).toBe(true);
+    expect(allowed('GET','/api/playback/12/file.mp4')).toBe(true);
     expect(allowed('HEAD','/api/playback/12/dlna')).toBe(true);
+    expect(allowed('HEAD','/api/playback/12/dlna.ts')).toBe(true);
     expect(allowed('OPTIONS','/api/playback/12/hls/index.m3u8')).toBe(true);
     expect(allowed('POST','/api/device/media/12/session')).toBe(true);
     expect(allowed('POST','/api/device/media/12/decision')).toBe(true);
+    expect(allowed('GET','/api/device/media/12/artwork')).toBe(true);
+    expect(allowed('GET','/api/metadata/images/12')).toBe(false);
     expect(allowed('POST','/api/playback/12/decision')).toBe(false);
     expect(allowed('POST','/api/devices/pair/approve')).toBe(false);
     expect(allowed('PATCH','/api/settings')).toBe(false);

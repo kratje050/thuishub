@@ -21,6 +21,7 @@ export type StartConfirmedDlnaPlaybackInput = {
   uri: string;
   metadata?: string;
   confirmation?: DlnaPlaybackConfirmationOptions;
+  fallback?: (error: unknown) => Promise<{ uri: string; metadata?: string } | null>;
 };
 
 function failureReason(error: unknown) {
@@ -38,9 +39,22 @@ function failureReason(error: unknown) {
  */
 export async function startConfirmedDlnaPlayback(input: StartConfirmedDlnaPlaybackInput) {
   try {
-    await input.controller.play({ uri: input.uri, metadata: input.metadata || '' });
-    if (input.session.position > 0) await input.controller.seek(input.session.position);
-    const transport = await waitForDlnaPlaying(input.controller, input.confirmation);
+    let selected = { uri: input.uri, metadata: input.metadata || '' };
+    let fallbackUsed = false;
+    try {
+      await input.controller.play(selected);
+    } catch (error) {
+      const fallback = await input.fallback?.(error);
+      if (!fallback) throw error;
+      selected = { uri: fallback.uri, metadata: fallback.metadata || '' };
+      fallbackUsed = true;
+      await input.controller.play(selected);
+    }
+    let transport = await waitForDlnaPlaying(input.controller, input.confirmation);
+    if (input.session.position > 0) {
+      await input.controller.seek(input.session.position);
+      transport = await waitForDlnaPlaying(input.controller, input.confirmation);
+    }
 
     const current = getPlaybackSession(input.session.id, input.session.userId);
     if (!current || current.endedAt) {
@@ -53,7 +67,7 @@ export async function startConfirmedDlnaPlayback(input: StartConfirmedDlnaPlayba
       state: 'playing',
     });
     session = await finalizePlaybackTransfer(session);
-    return { session, transport };
+    return { session, transport, fallbackUsed, uri: selected.uri };
   } catch (error) {
     const current = getPlaybackSession(input.session.id, input.session.userId);
     if (current && !current.endedAt) {

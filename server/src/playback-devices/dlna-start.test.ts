@@ -66,7 +66,7 @@ describe('bevestigde DLNA-start en atomaire handoff', () => {
     const sourceGrant = tokens.createPlaybackGrant({ sessionId: source.id, resource: 'file' });
     const destination = destinationSession(userId, source.id);
     const destinationGrant = tokens.createPlaybackGrant({ sessionId: destination.id, resource: 'file' });
-    const controller = fakeController([{ state: 'TRANSITIONING' }, { state: 'PLAYING' }]);
+    const controller = fakeController([{ state: 'TRANSITIONING' }, { state: 'PLAYING' }, { state: 'PLAYING' }]);
 
     const started = startConfirmedDlnaPlayback({
       controller,
@@ -77,7 +77,7 @@ describe('bevestigde DLNA-start en atomaire handoff', () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(controller.play).toHaveBeenCalledTimes(1);
-    expect(controller.seek).toHaveBeenCalledWith(35);
+    expect(controller.seek).not.toHaveBeenCalled();
     expect(controller.getTransportInfo).toHaveBeenCalledTimes(1);
     expect(sessions.getPlaybackSession(source.id)).toMatchObject({ state: 'playing', endedAt: null });
     expect(sessions.getPlaybackSession(destination.id)).toMatchObject({ state: 'connecting', endedAt: null });
@@ -86,7 +86,8 @@ describe('bevestigde DLNA-start en atomaire handoff', () => {
     await vi.advanceTimersByTimeAsync(100);
     const result = await started;
 
-    expect(controller.getTransportInfo).toHaveBeenCalledTimes(2);
+    expect(controller.getTransportInfo).toHaveBeenCalledTimes(3);
+    expect(controller.seek).toHaveBeenCalledWith(35);
     expect(result.transport.state).toBe('PLAYING');
     expect(result.session).toMatchObject({ id: destination.id, state: 'playing', endedAt: null });
     expect(result.session.metadata.transferFromSessionId).toBeUndefined();
@@ -168,5 +169,24 @@ describe('bevestigde DLNA-start en atomaire handoff', () => {
     expect(controller.stop).toHaveBeenCalledTimes(1);
     expect(sessions.getPlaybackSession(destination.id)).toMatchObject({ state: 'stopped', endReason: 'receiver-error' });
     expect(tokens.verifyPlaybackToken(destinationGrant, mediaId, 'file', destination.id)).toBeNull();
+  });
+
+  it('probeert na UPnP 716 precies één voorbereide remux-URL en bevestigt daarna PLAYING', async () => {
+    const userId = user();
+    const destination = destinationSession(userId);
+    const controller = fakeController([{ state: 'PLAYING' }]);
+    controller.play.mockRejectedValueOnce(new Error('UPnP 716: Resource not found')).mockResolvedValueOnce(undefined);
+    const fallback = vi.fn(async () => ({ uri: 'http://192.168.1.10:8788/api/playback/1/dlna.ts?token=test', metadata: '' }));
+
+    const result = await startConfirmedDlnaPlayback({
+      controller,
+      session: destination,
+      uri: 'http://192.168.1.10:8788/api/playback/1/file.mp4?token=test',
+      fallback,
+    });
+
+    expect(controller.play).toHaveBeenCalledTimes(2);
+    expect(fallback).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ fallbackUsed: true, uri: expect.stringContaining('/dlna.ts'), transport: { state: 'PLAYING' } });
   });
 });

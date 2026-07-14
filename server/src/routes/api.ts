@@ -41,6 +41,8 @@ import { startConfirmedDlnaPlayback } from '../playback-devices/dlna-start.js';
 import { broadcastPlaybackSession, dispatchDeviceCommand } from '../playback-devices/websocket.js';
 import { runDiscoveryDiagnostics } from '../playback-devices/diagnostics.js';
 import { adjacentEpisodeId } from '../playback-devices/navigation.js';
+import { capabilityProfileFor } from '../playback-devices/profiles.js';
+import { maskDlnaPlaybackUrl, preflightDlnaPlaybackUrl } from '../playback-devices/dlna-preflight.js';
 import { abortPlaybackTransfer, armPlaybackTransferTimeout, assertPlaybackTransferControllerActionAllowed, disarmPlaybackTransferTimeout, finalizePlaybackTransfer, isPendingPlaybackTransfer, resolvePlaybackHandoffSource, stopPlaybackReceiver } from '../playback-devices/transfers.js';
 import { databaseTimestampMs } from '../time.js';
 
@@ -55,7 +57,8 @@ apiRouter.post('/devices/pair/request',requirePairingLanListener,pairingRateLimi
 apiRouter.post('/devices/pair/claim',requirePairingLanListener,pairingRateLimit(30), (req,res)=>{const result=claimPairing(String(req.body?.deviceId||''),String(req.body?.pairingSecret||''));res.status(result.status==='expired'?410:200).json(result)});
 apiRouter.get('/device/commands',requireDevice,(req,res)=>res.json({items:pendingDeviceCommands(req.playbackDevice!.id)}));
 apiRouter.post('/device/commands/:id/ack',requireDevice,(req,res)=>res.json({ok:acknowledgeDeviceCommand(req.playbackDevice!.id,Number(req.params.id))}));
-apiRouter.get('/device/library',requireDevice,(req,res)=>{const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;if(!profile)return res.status(403).end();const rows=db.prepare('SELECT * FROM media_items ORDER BY sort_title COLLATE NOCASE').all() as any[];const max=deviceRatingLevels[String(profile.maxRating||'ALL').toUpperCase().replace(/[- ]/g,'_')]??99;res.json(rows.filter(row=>profile.role==='admin'||max===99||Boolean(row.content_rating&&row.content_rating!=='ONBEKEND'&&(deviceRatingLevels[String(row.content_rating).toUpperCase().replace(/[- ]/g,'_')]??99)<=max)).map(row=>({id:row.id,kind:row.kind,title:row.title,seriesTitle:row.series_title,season:row.season,episode:row.episode,year:row.year,width:row.width,height:row.height,hdrType:row.hdr_type,audioCodec:row.audio_codec,atmos:Boolean(row.atmos),posterUrl:imageApiUrl(row.id,'poster')})))});
+apiRouter.get('/device/library',requireDevice,(req,res)=>{const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;if(!profile)return res.status(403).end();const rows=db.prepare('SELECT * FROM media_items ORDER BY sort_title COLLATE NOCASE').all() as any[];const max=deviceRatingLevels[String(profile.maxRating||'ALL').toUpperCase().replace(/[- ]/g,'_')]??99;res.json(rows.filter(row=>profile.role==='admin'||max===99||Boolean(row.content_rating&&row.content_rating!=='ONBEKEND'&&(deviceRatingLevels[String(row.content_rating).toUpperCase().replace(/[- ]/g,'_')]??99)<=max)).map(row=>({id:row.id,kind:row.kind,title:row.title,seriesTitle:row.series_title,season:row.season,episode:row.episode,year:row.year,width:row.width,height:row.height,hdrType:row.hdr_type,audioCodec:row.audio_codec,atmos:Boolean(row.atmos),posterUrl:`/api/device/media/${row.id}/artwork`})))});
+apiRouter.get('/device/media/:id/artwork',requireDevice,(req,res)=>{const mediaId=Number(req.params.id);const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;const item=db.prepare(`SELECT m.content_rating contentRating,COALESCE((SELECT local_path FROM metadata_images WHERE media_id=m.id AND image_type='poster' AND selected=1 AND local_path IS NOT NULL ORDER BY manually_selected DESC,id DESC LIMIT 1),m.poster_path) file FROM media_items m WHERE m.id=?`).get(mediaId) as any;if(!item)return res.status(404).end();if(!profile||!ratingAllowed(item.contentRating,profile.maxRating,profile.role==='admin'))return res.status(403).end();if(!item.file||!path.isAbsolute(item.file)||!fs.existsSync(item.file))return res.status(404).end();res.setHeader('Cache-Control','private,max-age=86400,immutable');res.type(mime.lookup(item.file)||'application/octet-stream').sendFile(item.file)});
 apiRouter.post('/device/media/:id/session',requireDevice,async(req,res,next)=>{try{
   const profile=db.prepare('SELECT role,max_content_rating maxRating FROM users WHERE id=?').get(req.playbackDevice!.userId) as any;
   if(!profile)return res.status(403).json({error:'Het gekoppelde profiel bestaat niet meer.'});
@@ -113,16 +116,19 @@ function playbackTarget(deviceId:string,userId:number){
   const device=playbackDeviceRegistry.getForUser(deviceId,userId);
   if(!device||!device.online)return null;
   if(device.requiresPairing&&!device.trusted)return null;
-  return{device,protocol:device.protocol,capabilities:device.capabilities,needsLan:device.protocol!=='local-browser'};
+  const capabilities=device.protocol==='dlna-upnp'
+    ?capabilityProfileFor({protocol:'dlna-upnp',manufacturer:device.manufacturer,model:device.model,platform:device.capabilities.platform})
+    :device.capabilities;
+  return{device,protocol:device.protocol,capabilities,needsLan:device.protocol!=='local-browser'};
 }
 
-function playbackUrls(base:string,mediaId:number,sessionId:string,decision:any,hasSubtitle:boolean,protocol:string,filePath:string,startPosition=0){
-  const resource=decision.mode==='direct_play'?'file':protocol==='dlna-upnp'?'dlna':'hls';
+function playbackUrls(base:string,mediaId:number,sessionId:string,decision:any,hasSubtitle:boolean,protocol:string,filePath:string,startPosition=0,forceDlnaRemux=false){
+  const resource=forceDlnaRemux?'dlna':decision.mode==='direct_play'?'file':protocol==='dlna-upnp'?'dlna':'hls';
   const options={copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight,targetAudioChannels:decision.targetAudioChannels,startPosition};
   const playback=createPlaybackGrant({sessionId,resource,options},600);
   const subtitle=hasSubtitle?createPlaybackGrant({sessionId,resource:'subtitle'},600):'';
   const artwork=createPlaybackGrant({sessionId,resource:'artwork'},600);
-  const route=resource==='file'?'file':resource==='dlna'?'dlna':'hls/index.m3u8';
+  const route=resource==='file'?'file.mp4':resource==='dlna'?'dlna.ts':'hls/index.m3u8';
   const detectedMime=String(mime.lookup(filePath)||'video/mp4');
   const directMime=detectedMime==='video/mp2t'?'video/mpeg':detectedMime;
   const dlnaProtocolInfo=resource==='dlna'
@@ -192,6 +198,7 @@ async function beginPlaybackOnDevice(input:{userId:number;admin:boolean;maxConte
     else if(!getPlaybackSession(session.id,input.userId)?.endedAt)stopPlaybackSession({id:session.id,userId:input.userId,reason});
   };
   let urls:ReturnType<typeof playbackUrls>;
+  let effectiveDecision=decision;
   try{urls=playbackUrls(base,input.mediaId,session.id,decision,Boolean(row.subtitle_path),target.protocol,row.file_path,session.position)}
   catch(error){await failNewSession('load-failed');throw error}
   if((target.protocol==='thuishub-tv-app'||target.protocol==='android-tv'||target.protocol==='samsung-tizen')&&input.dispatchLoad!==false){
@@ -199,17 +206,46 @@ async function beginPlaybackOnDevice(input:{userId:number;admin:boolean;maxConte
     catch(error){await failNewSession('load-failed');throw error}
   }else if(target.protocol==='dlna-upnp'){
     try{
+      const controller=dlnaController(input.deviceId);
+      const preflight=await preflightDlnaPlaybackUrl(urls.playback,base);
+      log('INFO','streaming','DLNA-afspeel-URL gecontroleerd voordat deze naar de tv wordt gestuurd.',{
+        mediaId:input.mediaId,deviceId:input.deviceId,playbackUrlMasked:preflight.maskedUrl,
+        headStatus:preflight.headStatus,rangeStatus:preflight.rangeStatus,contentType:preflight.contentType,
+        container:decision.outputContainer,video:decision.copyVideo?'copy':'transcode',audio:decision.copyAudio?'copy':'transcode',startPosition:session.position,
+      });
+      const protocolInfo=await controller.getProtocolInfo().catch(error=>{
+        log('WARNING','tv-discovery','ConnectionManager/GetProtocolInfo kon niet worden gelezen.',{deviceId:input.deviceId,error:error instanceof Error?error.message:String(error)});
+        return null;
+      });
+      if(protocolInfo)log('INFO','tv-discovery','DLNA ConnectionManager-profiel gelezen.',{deviceId:input.deviceId,sinkProtocolCount:protocolInfo.sink?protocolInfo.sink.split(',').length:0});
       const started=await startConfirmedDlnaPlayback({
-        controller:dlnaController(input.deviceId),
+        controller,
         session,
         uri:urls.playback,
         metadata:dlnaMetadata(row.title,urls.playback,urls.dlnaProtocolInfo,urls.artwork,Number(row.duration)||0),
+        fallback:async error=>{
+          if(!/UPnP\s+716|Resource not found/i.test(error instanceof Error?error.message:String(error))||urls.playback.includes('/dlna.ts'))return null;
+          effectiveDecision={...decision,mode:decision.copyVideo&&decision.copyAudio?'direct_stream':'transcode',label:decision.copyVideo&&decision.copyAudio?'Direct Stream':'Transcode',outputContainer:'mpegts',reasons:[...decision.reasons,'Samsung DLNA accepteerde de directe MP4-resource niet; een MPEG-TS-remux is geprobeerd.']};
+          urls=playbackUrls(base,input.mediaId,session.id,effectiveDecision,Boolean(row.subtitle_path),target.protocol,row.file_path,session.position,true);
+          const retryPreflight=await preflightDlnaPlaybackUrl(urls.playback,base);
+          log('WARNING','streaming','Samsung DLNA 716: eenmalige compatibele remuxfallback wordt gestart.',{
+            mediaId:input.mediaId,deviceId:input.deviceId,playbackUrlMasked:retryPreflight.maskedUrl,
+            headStatus:retryPreflight.headStatus,rangeStatus:retryPreflight.rangeStatus,container:'mpegts',
+            video:effectiveDecision.copyVideo?'copy':'transcode',audio:effectiveDecision.copyAudio?'copy':'transcode',retry:1,
+          });
+          return{uri:urls.playback,metadata:dlnaMetadata(row.title,urls.playback,urls.dlnaProtocolInfo,urls.artwork,Number(row.duration)||0)};
+        },
       });
       session=started.session;
-    }catch(error){throw Object.assign(new Error(`De DLNA-tv kon het afspelen niet starten: ${error instanceof Error?error.message:String(error)}`),{status:502})}
+      log('INFO','streaming','Samsung DLNA-afspelen bevestigd.',{mediaId:input.mediaId,deviceId:input.deviceId,playbackUrlMasked:maskDlnaPlaybackUrl(urls.playback),setAvTransportUriResult:'ok',playResult:started.transport.state,fallbackUsed:started.fallbackUsed});
+    }catch(error){
+      await failNewSession('load-failed');
+      log('ERROR','streaming','DLNA-start geweigerd voordat een onbruikbare sessie actief werd.',{mediaId:input.mediaId,deviceId:input.deviceId,playbackUrlMasked:maskDlnaPlaybackUrl(urls.playback),error:error instanceof Error?error.message:String(error)});
+      throw Object.assign(new Error(`De DLNA-tv kon het afspelen niet starten: ${error instanceof Error?error.message:String(error)}`),{status:502});
+    }
   }
-  const acceleration=decision.copyVideo?null:videoTranscodePlan(row.color_transfer,decision.targetWidth||1920,Boolean(decision.burnSubtitles));
-  return{...sessionPresentation(session,row,target,urls),decision,technical:{...mediaCapabilitiesFromRow(row),fileSize:row.size,duration:row.duration,hardwareDecodeActive:Boolean(acceleration?.hardwareDecode),hardwareEncodeActive:Boolean(acceleration?.hardwareEncode)},device:target.device||{id:input.deviceId,name:target.protocol==='google-cast'?'Google Cast':'Deze browser',protocol:target.protocol}};
+  const acceleration=effectiveDecision.copyVideo?null:videoTranscodePlan(row.color_transfer,effectiveDecision.targetWidth||1920,Boolean(effectiveDecision.burnSubtitles));
+  return{...sessionPresentation(session,row,target,urls),decision:effectiveDecision,technical:{...mediaCapabilitiesFromRow(row),fileSize:row.size,duration:row.duration,hardwareDecodeActive:Boolean(acceleration?.hardwareDecode),hardwareEncodeActive:Boolean(acceleration?.hardwareEncode)},device:target.device||{id:input.deviceId,name:target.protocol==='google-cast'?'Google Cast':'Deze browser',protocol:target.protocol}};
 }
 
 apiRouter.get('/bootstrap', (req, res) => {

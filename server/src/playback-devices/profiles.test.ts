@@ -12,5 +12,7 @@ describe('apparaatprofielen', () => {
     expect(capabilityProfileFor({ protocol: 'samsung-tizen' }).platform).toBe('tizen');
     expect(capabilityProfileFor({ protocol: 'android-tv' }).platform).toBe('android-tv');
     expect(capabilityProfileFor({ protocol: 'dlna-upnp' }).platform).toBe('dlna');
+    const samsungDlna = capabilityProfileFor({ protocol: 'dlna-upnp', manufacturer: 'Samsung Electronics', model: 'QE65QEF1AUXXN' });
+    expect(samsungDlna).toMatchObject({ platform: 'tizen', maxWidth: 3840, maxAudioChannels: 6, eac3: true });
   });
 });
