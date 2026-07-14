@@ -4,6 +4,7 @@ import android.app.AlertDialog
 import android.app.UiModeManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -87,7 +88,10 @@ class MainActivity : ComponentActivity() {
         private const val SERVICE_TYPE = "_thuishub._tcp."
         private const val DISCOVERY_PORT = 8789
         private const val DISCOVERY_REQUEST = "THUISHUB_DISCOVER_V1"
-        private const val APP_VERSION = "1.2.18"
+        private const val NEARBY_WIFI_PERMISSION = "android.permission.NEARBY_WIFI_DEVICES"
+        private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
+        private const val LOCAL_NETWORK_PERMISSION_REQUEST = 8789
+        private const val APP_VERSION = "1.2.19"
         private const val UPDATE_MANIFEST_URL = "https://github.com/kratje050/thuishub/releases/latest/download/latest.json"
         private const val MAX_MANIFEST_BYTES = 256 * 1024
         private const val MAX_APK_BYTES = 200L * 1024 * 1024
@@ -122,6 +126,7 @@ class MainActivity : ComponentActivity() {
     private var serverConfirmed = false
     private var connectionAttemptActive = false
     private var connectionJob: Job? = null
+    private var pendingConnectionProgressScreen = false
     private var updateJob: Job? = null
     private var currentScreen = AppScreen.HOME
     private var lastConnectionStatus = ""
@@ -1213,6 +1218,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startConnection(showProgressScreen: Boolean) {
+        if (!ensureLocalNetworkPermission(showProgressScreen)) return
         stopConnectionAttempt()
         connectionAttemptActive = true
         serverConfirmed = false
@@ -1246,6 +1252,34 @@ class MainActivity : ComponentActivity() {
                     updateStatus("Geen ThuisHub gevonden. Controleer of de pc-app draait of gebruik Handmatig adres.")
                 }
             }
+        }
+    }
+
+    private fun requiredLocalNetworkPermission(): String? = when {
+        Build.VERSION.SDK_INT >= 37 -> LOCAL_NETWORK_PERMISSION
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> NEARBY_WIFI_PERMISSION
+        else -> null
+    }
+
+    private fun ensureLocalNetworkPermission(showProgressScreen: Boolean): Boolean {
+        val permission = requiredLocalNetworkPermission() ?: return true
+        if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) return true
+        pendingConnectionProgressScreen = showProgressScreen
+        if (showProgressScreen && currentScreen != AppScreen.CONNECTING) showPairing()
+        updateStatus("Geef ThuisHub toestemming voor apparaten in de buurt om je pc op het thuisnetwerk te vinden.")
+        requestPermissions(arrayOf(permission), LOCAL_NETWORK_PERMISSION_REQUEST)
+        return false
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != LOCAL_NETWORK_PERMISSION_REQUEST) return
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            lastConnectionStatus = "Toegang tot het thuisnetwerk toegestaan. ThuisHub wordt gezocht..."
+            startConnection(pendingConnectionProgressScreen)
+        } else {
+            lastConnectionStatus = "Geen toegang tot het thuisnetwerk. Sta bij Android-instellingen 'Apparaten in de buurt' toe om met je pc te verbinden."
+            updateStatus(lastConnectionStatus)
         }
     }
 

@@ -1,4 +1,4 @@
-param([string]$Version = '1.2.18', [ValidateSet('stable','beta','development')][string]$Channel = 'stable')
+param([string]$Version = '1.2.19', [ValidateSet('stable','beta','development')][string]$Channel = 'stable')
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $release = Join-Path $root 'release'

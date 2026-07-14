@@ -1,5 +1,11 @@
 # Wijzigingen
 
+## 1.2.19 - 14 juli 2026
+
+- Android vraagt nu expliciet toestemming voor apparaten in de buurt en lokale netwerktoegang voordat de app naar de ThuisHub-pc zoekt.
+- Na toestemming wordt automatisch opnieuw gezocht en verbonden; bij weigeren toont de app precies welke Android-instelling moet worden aangezet.
+- De bestaande mDNS-, UDP- en subnetdetectie blijft behouden en gebruikt uitsluitend het prive-thuisnetwerk.
+
 ## 1.2.16 — 14 juli 2026
 
 - ThuisHub toont direct een licht opstartvenster terwijl de lokale server op de achtergrond gereedkomt.

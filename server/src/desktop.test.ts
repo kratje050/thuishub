@@ -17,7 +17,7 @@ describe('Windows-distributie', () => {
 
   it('configureert portable, installer en veilige upgrade', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
-    expect(packageJson.version).toBe('1.2.18');
+    expect(packageJson.version).toBe('1.2.19');
     expect(packageJson.build.nsis.artifactName).toContain('ThuisHub-Setup');
     expect(packageJson.build.nsis.deleteAppDataOnUninstall).toBe(false);
     expect(packageJson.build.nsis.useZip).toBe(false);
@@ -39,6 +39,15 @@ describe('Windows-distributie', () => {
     expect(desktopEntry).toContain('mainWindow.setAlwaysOnTop(true)');
     expect(desktopEntry).toContain("mainWindow.loadFile(path.join(__dirname, 'startup.html')");
     expect(desktopEntry.indexOf('createWindow();')).toBeLessThan(desktopEntry.indexOf('await ensureServer();'));
+  });
+
+  it('vraagt op Android toestemming voordat de app het lokale netwerk doorzoekt', () => {
+    const manifest = fs.readFileSync(path.resolve('apps/android-tv/app/src/main/AndroidManifest.xml'), 'utf8');
+    const activity = fs.readFileSync(path.resolve('apps/android-tv/app/src/main/java/nl/thuishub/tv/MainActivity.kt'), 'utf8');
+    expect(manifest).toContain('android.permission.NEARBY_WIFI_DEVICES');
+    expect(manifest).toContain('android.permission.ACCESS_LOCAL_NETWORK');
+    expect(activity).toContain('ensureLocalNetworkPermission(showProgressScreen)');
+    expect(activity).toContain('startConnection(pendingConnectionProgressScreen)');
   });
 
   it('accepteert alleen de exacte gecontroleerde installer en verwijdert het overdrachtsbestand', () => {
