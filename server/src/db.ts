@@ -511,7 +511,7 @@ export function publicSettings() {
     automaticBackups: getSetting('automaticBackups', 'daily'),
     backupRetention: Number(getSetting('backupRetention', '14')),
     backupLocation: getSetting('backupLocation', appPaths.backupsDir),
-    automaticUpdateCheck: getSetting('automaticUpdateCheck', 'false') === 'true',
+    automaticUpdateCheck: true,
     updateChannel: getSetting('updateChannel', 'stable'),
     developmentUpdatesEnabled: getSetting('developmentUpdatesEnabled', 'false') === 'true',
     updateManifestUrl: getSetting('updateManifestUrl', ''),

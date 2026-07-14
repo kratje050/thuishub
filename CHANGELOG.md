@@ -1,5 +1,12 @@
 # Wijzigingen
 
+## 1.2.6 — 14 juli 2026
+
+- De Windows-app en browserserver controleren bij iedere start automatisch en niet-blokkerend op de nieuwste GitHub-release.
+- Een oude opgeslagen instelling die automatische updatecontrole uitschakelde kan deze startcontrole niet meer tegenhouden.
+- De Android-app controleert kort na iedere start zelfstandig op updates, ook zonder gekoppelde ThuisHub-server.
+- Alleen wanneer een nieuwere Android-versie beschikbaar is verschijnt een melding; downloaden en installeren vereisen nog steeds een bewuste bevestiging.
+
 ## 1.2.5 — 14 juli 2026
 
 - De Android-app opent voortaan op een bruikbaar Home-scherm in plaats van direct in een blokkerende automatische zoekweergave.

@@ -17,7 +17,7 @@ describe('Windows-distributie', () => {
 
   it('configureert portable, installer en veilige upgrade', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.resolve('package.json'), 'utf8'));
-    expect(packageJson.version).toBe('1.2.5');
+    expect(packageJson.version).toBe('1.2.6');
     expect(packageJson.build.nsis.artifactName).toContain('ThuisHub-Setup');
     expect(packageJson.build.nsis.deleteAppDataOnUninstall).toBe(false);
     expect(packageJson.build.portable.artifactName).toContain('ThuisHub-Portable');
@@ -29,6 +29,9 @@ describe('Windows-distributie', () => {
     const upgradeTemplate=fs.readFileSync(path.resolve('node_modules/app-builder-lib/templates/nsis/include/installUtil.nsh'),'utf8');
     expect(upgradeTemplate).toContain('Function uninstallOldVersion');
     expect(upgradeTemplate).toContain('/S /KEEP_APP_DATA');
+    const serverEntry=fs.readFileSync(path.resolve('server/src/index.ts'),'utf8');
+    expect(serverEntry).toContain('void checkForUpdates();');
+    expect(serverEntry).not.toContain("if (getSetting('automaticUpdateCheck'");
   });
 
   it('accepteert alleen de exacte gecontroleerde installer en verwijdert het overdrachtsbestand', () => {

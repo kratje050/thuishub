@@ -648,7 +648,7 @@ apiRouter.delete('/logs', requireAdmin, (_req,res)=>{clearLogs();res.status(204)
 apiRouter.post('/logs/open-folder', requireAdmin, (_req,res)=>{if(process.platform==='win32')execFile('explorer.exe',[appPaths.logsDir],{windowsHide:false});res.status(204).end()});
 
 apiRouter.get('/tailscale', requireAdmin, async(_req,res)=>res.json(await tailscaleStatus()));
-apiRouter.get('/updates', requireAdmin, (_req,res)=>res.json({currentVersion:APP_VERSION,channel:getSetting('updateChannel','stable'),automatic:getSetting('automaticUpdateCheck','false')==='true',source:'GitHub Releases: kratje050/thuishub',lastCheckAt:getSetting('lastUpdateCheckAt',''),lastResult:JSON.parse(getSetting('lastUpdateResult','{}')||'{}'),downloaded:downloadedUpdateStatus()}));
+apiRouter.get('/updates', requireAdmin, (_req,res)=>res.json({currentVersion:APP_VERSION,channel:getSetting('updateChannel','stable'),automatic:true,source:'GitHub Releases: kratje050/thuishub',lastCheckAt:getSetting('lastUpdateCheckAt',''),lastResult:JSON.parse(getSetting('lastUpdateResult','{}')||'{}'),downloaded:downloadedUpdateStatus()}));
 apiRouter.post('/updates/check', requireAdmin, async(_req,res)=>res.json(await checkForUpdates()));
 apiRouter.post('/updates/download', requireAdmin, async(req,res,next)=>{try{if(req.body?.confirm!==true)return res.status(400).json({error:'Bevestig dat je de update wilt downloaden.'});const trusted=JSON.parse(getSetting('lastUpdateResult','{}')||'{}');if(!trusted.available||!trusted.version||trusted.version!==req.body?.manifest?.version)return res.status(409).json({error:'Controleer eerst opnieuw op updates.'});res.json(await downloadUpdate(trusted))}catch(error){next(error)}});
 apiRouter.post('/updates/install', requireAdmin, (req,res,next)=>{try{if(req.body?.confirm!==true)return res.status(400).json({error:'Bevestig dat ThuisHub mag afsluiten en de update-installer mag openen.'});res.status(202).json(requestUpdateInstall())}catch(error){next(error)}});
@@ -752,7 +752,7 @@ apiRouter.patch('/settings', requireAdmin, async (req, res, next) => {
     if (['off','daily','weekly'].includes(automaticBackups)) setSetting('automaticBackups',automaticBackups);
     if (backupRetention !== undefined) setSetting('backupRetention',String(Math.min(100,Math.max(1,Number(backupRetention)||14))));
     if (typeof backupLocation==='string'&&backupLocation.trim()) setSetting('backupLocation',path.resolve(backupLocation.trim()));
-    if (typeof automaticUpdateCheck==='boolean') setSetting('automaticUpdateCheck',String(automaticUpdateCheck));
+    if (typeof automaticUpdateCheck==='boolean') setSetting('automaticUpdateCheck','true');
     if (['stable','beta','development'].includes(updateChannel)) setSetting('updateChannel',updateChannel);
     if (typeof developmentUpdatesEnabled==='boolean') setSetting('developmentUpdatesEnabled',String(developmentUpdatesEnabled));
     if (maxLogStorageMb!==undefined) { const value=Math.min(2048,Math.max(10,Number(maxLogStorageMb)||100)); setSetting('maxLogStorageMb',String(value)); setMaxLogStorageMb(value); }

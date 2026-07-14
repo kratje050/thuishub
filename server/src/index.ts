@@ -89,7 +89,7 @@ const server = app.listen(port, host, () => {
   void migrateLegacyTmdbMetadata().catch(error => console.error('Metadata-migratie mislukt:',error instanceof Error?error.message:String(error))).finally(()=>startMetadataQueueWorker());
   console.log(`\n${APP_NAME} ${APP_VERSION} draait op http://localhost:${port}\n`);
   log('INFO', 'server', 'Server gestart.', { host, port });
-  if (getSetting('automaticUpdateCheck', 'false') === 'true') void checkForUpdates();
+  void checkForUpdates();
 });
 const lanServer = startLanStreamingServer(app);
 attachPlaybackWebSockets(server, { lan: false });

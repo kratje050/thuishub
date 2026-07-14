@@ -56,7 +56,7 @@ import java.util.UUID
 class MainActivity : ComponentActivity() {
     companion object {
         private const val SERVICE_TYPE = "_thuishub._tcp."
-        private const val APP_VERSION = "1.2.5"
+        private const val APP_VERSION = "1.2.6"
         private const val UPDATE_MANIFEST_URL = "https://github.com/kratje050/thuishub/releases/latest/download/latest.json"
         private const val MAX_MANIFEST_BYTES = 256 * 1024
         private const val MAX_APK_BYTES = 200L * 1024 * 1024
@@ -110,6 +110,7 @@ class MainActivity : ComponentActivity() {
         nsdManager = getSystemService(Context.NSD_SERVICE) as NsdManager
         showHome()
         if (automaticConnectionEnabled) root.post { startConnection(showProgressScreen = false) }
+        root.postDelayed({ checkForAndroidUpdate(silent = true) }, 1_200)
     }
 
     private fun newScreenColumn(): LinearLayout {
@@ -442,7 +443,7 @@ class MainActivity : ComponentActivity() {
         runOnUiThread { screenStatus?.text = message }
     }
 
-    private fun checkForAndroidUpdate() {
+    private fun checkForAndroidUpdate(silent: Boolean = false) {
         if (updateJob?.isActive == true) return
         lastUpdateStatus = "De nieuwste GitHub-release controleren…"
         updateScreenStatus?.text = lastUpdateStatus
@@ -460,7 +461,13 @@ class MainActivity : ComponentActivity() {
                 lastUpdateStatus = error.message ?: "Updatecontrole is mislukt."
             }
             updateJob = null
-            if (currentScreen == AppScreen.UPDATES) showUpdates()
+            if (currentScreen == AppScreen.UPDATES) {
+                showUpdates()
+            } else if (availableUpdate?.let { compareVersions(it.version, APP_VERSION) > 0 } == true) {
+                showToast("ThuisHub ${availableUpdate?.version} is beschikbaar. Open App-updates om bij te werken.")
+            } else if (!silent && lastUpdateStatus.startsWith("Updatecontrole is mislukt")) {
+                showToast(lastUpdateStatus)
+            }
         }
     }
 
