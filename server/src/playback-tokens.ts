@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { db, getSetting, setSetting } from './db.js';
 import { getPlaybackSession, playbackSessionInternals } from './playback-devices/sessions.js';
 
-export type PlaybackResource = 'file' | 'hls' | 'subtitle' | 'download' | 'artwork';
+export type PlaybackResource = 'file' | 'hls' | 'dlna' | 'subtitle' | 'download' | 'artwork';
 export type PlaybackGrantOptions = {
   copyVideo?: boolean;
   copyAudio?: boolean;
@@ -42,7 +42,7 @@ type StoredGrant = {
   session_device_id: string | null;
 };
 
-const resources = new Set<PlaybackResource>(['file', 'hls', 'subtitle', 'download', 'artwork']);
+const resources = new Set<PlaybackResource>(['file', 'hls', 'dlna', 'subtitle', 'download', 'artwork']);
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 const boundedTtl = (value: number) => Math.min(3600, Math.max(30, Number.isFinite(value) ? Math.floor(value) : 300));
 

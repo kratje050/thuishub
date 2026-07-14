@@ -226,12 +226,31 @@ async function fetchLocalText(input: string | URL, options: LocalFetchOptions = 
     });
     if (response.status >= 300 && response.status < 400) throw new Error('Redirect van een DLNA-apparaat is geweigerd.');
     const text = await readBoundedBody(response, maxBytes);
-    if (!response.ok) throw new Error(`DLNA-apparaat gaf HTTP-status ${response.status}.`);
+    if (!response.ok) {
+      const code = cleanText(text.match(/<(?:\w+:)?errorCode>([^<]+)</i)?.[1], 32);
+      const description = cleanText(text.match(/<(?:\w+:)?errorDescription>([^<]+)</i)?.[1], 160);
+      const detail = [code && `UPnP ${code}`, description].filter(Boolean).join(': ');
+      throw new DlnaHttpError(`DLNA-apparaat gaf HTTP-status ${response.status}${detail ? ` (${detail})` : ''}.`, response.status);
+    }
     return text;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw new Error('DLNA-verzoek is verlopen.');
     throw error;
   } finally { clearTimeout(timer); }
+}
+
+class DlnaHttpError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = 'DlnaHttpError';
+  }
+}
+
+class DlnaSoapFaultError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DlnaSoapFaultError';
+  }
 }
 
 function parseXml(xml: string) {
@@ -787,7 +806,12 @@ export class DlnaController {
       body: envelope,
     });
     if (response.trim()) parseXml(response);
-    if (/<(?:\w+:)?Fault\b/i.test(response)) throw new Error(`DLNA-apparaat weigerde ${action}.`);
+    if (/<(?:\w+:)?Fault\b/i.test(response)) {
+      const code = cleanText(response.match(/<(?:\w+:)?errorCode>([^<]+)</i)?.[1], 32);
+      const description = cleanText(response.match(/<(?:\w+:)?errorDescription>([^<]+)</i)?.[1], 160);
+      const detail = [code && `UPnP ${code}`, description].filter(Boolean).join(': ');
+      throw new DlnaSoapFaultError(`DLNA-apparaat weigerde ${action}${detail ? ` (${detail})` : ''}.`);
+    }
     return response;
   }
 
@@ -799,8 +823,19 @@ export class DlnaController {
       this.networkScope(this.device.services.avTransport),
     );
     if (Buffer.byteLength(metadata, 'utf8') > 64 * 1024 || /<!\s*(?:DOCTYPE|ENTITY)\b/i.test(metadata)) throw new Error('Onveilige of te grote DLNA-metadata is geweigerd.');
-    await this.soap(this.device.services.avTransport, 'SetAVTransportURI',
-      `<InstanceID>0</InstanceID><CurrentURI>${escapeXml(safeUri.toString())}</CurrentURI><CurrentURIMetaData>${escapeXml(metadata)}</CurrentURIMetaData>`);
+    const send = (value: string) => this.soap(this.device.services.avTransport, 'SetAVTransportURI',
+      `<InstanceID>0</InstanceID><CurrentURI>${escapeXml(safeUri.toString())}</CurrentURI><CurrentURIMetaData>${escapeXml(value)}</CurrentURIMetaData>`);
+    try {
+      await send(metadata);
+    } catch (error) {
+      // Samsung- en enkele oudere DLNA-renderers melden HTTP 500 wanneer ze
+      // DIDL-Lite niet herkennen, terwijl dezelfde URI zonder metadata werkt.
+      const mayRetryWithoutMetadata = Boolean(metadata) && (
+        error instanceof DlnaSoapFaultError || error instanceof DlnaHttpError && error.status === 500
+      );
+      if (!mayRetryWithoutMetadata) throw error;
+      await send('');
+    }
   }
 
   async play(input?: string | { uri?: string; metadata?: string }) {

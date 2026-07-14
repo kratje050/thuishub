@@ -198,6 +198,51 @@ describe('DLNA-controller', () => {
     expect(calls).toHaveLength(count);
   });
 
+  it('probeert SetAVTransportURI bij Samsung HTTP 500 eenmalig opnieuw zonder metadata', async () => {
+    const device = await parseDlnaDeviceDescription(rendererXml().replace('<manufacturer>Voorbeeld</manufacturer>', '<manufacturer>Samsung Electronics</manufacturer>'), {
+      descriptionUrl: response().location,
+      sourceAddress: '192.168.1.40',
+      ...subnet,
+    });
+    const calls: Array<{ action: string; body: string }> = [];
+    let setAttempts = 0;
+    const fetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string>;
+      const action = headers.SOAPAction || '';
+      calls.push({ action, body: String(init?.body || '') });
+      if (action.includes('#SetAVTransportURI') && setAttempts++ === 0) {
+        return new Response('<s:Envelope><s:Body><s:Fault><detail><UPnPError><errorCode>714</errorCode><errorDescription>Illegal MIME-type</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>', { status: 500 });
+      }
+      return new Response('<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body/></s:Envelope>');
+    }) as typeof fetch;
+    const controller = new DlnaController(device, { fetcher });
+
+    await controller.play({
+      uri: 'http://192.168.1.10:8788/api/playback/1/dlna?token=verborgen',
+      metadata: '<DIDL-Lite><item><res protocolInfo="http-get:*:video/mpeg:*">film</res></item></DIDL-Lite>',
+    });
+
+    const setCalls = calls.filter(call => call.action.includes('#SetAVTransportURI'));
+    expect(setCalls).toHaveLength(2);
+    expect(setCalls[0].body).toContain('&lt;DIDL-Lite&gt;');
+    expect(setCalls[1].body).toContain('<CurrentURIMetaData></CurrentURIMetaData>');
+    expect(calls.at(-1)?.action).toContain('#Play');
+  });
+
+  it('toont de begrensde UPnP-foutcode wanneer ook een lege SetURI wordt geweigerd', async () => {
+    const device = await parseDlnaDeviceDescription(rendererXml(), {
+      descriptionUrl: response().location,
+      sourceAddress: '192.168.1.40',
+      ...subnet,
+    });
+    const fetcher = (async () => new Response(
+      '<s:Envelope><s:Body><s:Fault><detail><UPnPError><errorCode>716</errorCode><errorDescription>Resource not found</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>',
+      { status: 500 },
+    )) as typeof fetch;
+    await expect(new DlnaController(device, { fetcher }).setTransportUri('http://192.168.1.10:8788/api/playback/1/dlna'))
+      .rejects.toThrow(/500.*UPnP 716.*Resource not found/i);
+  });
+
   it('weigert een onveilig control endpoint opnieuw op het moment van bedienen', async () => {
     const device: DlnaDevice = {
       id: 'dlna-test', name: 'Test', protocol: 'dlna-upnp', deviceType: 'television', manufacturer: '', model: '', modelNumber: '',

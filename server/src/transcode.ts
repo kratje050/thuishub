@@ -74,6 +74,38 @@ export function hlsFile(id: number, name: string) {
   return fs.existsSync(file) ? file : null;
 }
 
+export function dlnaMpegTsArgs(filePath: string, colorTransfer?: string | null, options: HlsOptions = {}, startSeconds = 0) {
+  const encoder = videoEncoder();
+  const baseVideoFilter = videoFilter(colorTransfer, options.targetWidth || 1920);
+  const completeVideoFilter = options.burnSubtitles
+    ? `subtitles=filename='${subtitleFilterPath(options.subtitlePath || filePath)}',${baseVideoFilter}`
+    : baseVideoFilter;
+  const videoArgs = options.copyVideo ? ['-c:v', 'copy'] : ['-c:v', encoder.codec, ...encoder.args,
+    '-vf', completeVideoFilter, ...(options.targetBitrateMbps ? ['-maxrate', `${options.targetBitrateMbps}M`, '-bufsize', `${Math.max(2, options.targetBitrateMbps * 2)}M`] : [])];
+  // Het generieke DLNA-profiel is bewust stereo. Dit voorkomt dat televisies
+  // een verder geldige MPEG-TS-stream weigeren vanwege 5.1 AAC.
+  const audioArgs = options.copyAudio ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '192k', '-ac', '2'];
+  const safeStart = Math.min(7 * 24 * 3_600, Math.max(0, Number.isFinite(startSeconds) ? startSeconds : 0));
+  return [
+    '-hide_banner', '-loglevel', 'warning',
+    ...(safeStart > 0 ? ['-ss', safeStart.toFixed(3)] : []),
+    '-i', filePath,
+    '-map', '0:v:0', '-map', '0:a:0?', '-sn',
+    ...videoArgs, ...audioArgs,
+    '-muxpreload', '0', '-muxdelay', '0', '-mpegts_flags', '+resend_headers',
+    '-f', 'mpegts', 'pipe:1',
+  ];
+}
+
+export function createDlnaMpegTsStream(filePath: string, colorTransfer?: string | null, options: HlsOptions = {}, startSeconds = 0) {
+  const process = spawn(ffmpegPath, dlnaMpegTsArgs(filePath, colorTransfer, options, startSeconds), { windowsHide: true });
+  process.stderr.on('data', chunk => {
+    const previous = process.stderrLog || '';
+    process.stderrLog = `${previous}${chunk.toString()}`.slice(-16_384);
+  });
+  return process;
+}
+
 export function clearTranscodes() {
   for (const process of active.values()) process.kill();
   active.clear();

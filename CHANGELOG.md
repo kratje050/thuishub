@@ -1,5 +1,12 @@
 # Wijzigingen
 
+## 1.2.10 — 14 juli 2026
+
+- DLNA-transcoding gebruikt een continue H.264/AAC-stereo MPEG-TS-stream die door de gedetecteerde Samsung QLED wordt ondersteund, in plaats van een HLS-afspeellijst.
+- De afspeelopdracht bevat nu volledige DIDL-Lite-metadata met de echte media-URL, duur en DLNA-protocolinformatie.
+- Samsung-renderers die metadata met HTTP 500 weigeren worden eenmalig veilig opnieuw aangestuurd zonder metadata; UPnP-foutcodes worden voortaan zichtbaar in de foutmelding.
+- De nieuwe sessiegebonden DLNA-route ondersteunt tijdzoeken en is alleen via de begrensde privé-LAN-listener bereikbaar.
+
 ## 1.2.9 — 14 juli 2026
 
 - De melding “Video wordt klaargemaakt” is voortaan gekoppeld aan de werkelijke laad- en bufferstatus en blijft niet meer over een spelende film staan.

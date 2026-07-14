@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import mime from 'mime-types';
 import { db, getSetting } from '../db.js';
-import { ensureHls, hlsFile } from '../transcode.js';
-import { verifyPlaybackToken } from '../playback-tokens.js';
+import { createDlnaMpegTsStream, ensureHls, hlsFile } from '../transcode.js';
+import { verifyPlaybackToken, type PlaybackResource } from '../playback-tokens.js';
 
 export const playbackRouter = Router();
 
@@ -33,8 +33,16 @@ function cors(req: Request, res: Response) {
 
 playbackRouter.options('/:id/*resource', (req, res) => cors(req, res) ? res.status(204).setHeader('Content-Length', '0').end() : res.status(403).end());
 
-function grant(req: Request, resource: 'file' | 'hls' | 'subtitle' | 'download' | 'artwork') {
+function grant(req: Request, resource: PlaybackResource) {
   return verifyPlaybackToken(String(req.query.token || ''), Number(req.params.id), resource);
+}
+
+function dlnaTimeSeekSeconds(value: unknown) {
+  const raw = String(value || '').trim();
+  const match = raw.match(/(?:^|\s)npt=(?:(\d+):(\d{2}):(\d{2}(?:\.\d+)?)|(\d+(?:\.\d+)?))-/i);
+  if (!match) return 0;
+  const seconds = match[4] !== undefined ? Number(match[4]) : Number(match[1]) * 3_600 + Number(match[2]) * 60 + Number(match[3]);
+  return Number.isFinite(seconds) ? Math.min(7 * 24 * 3_600, Math.max(0, seconds)) : 0;
 }
 
 function serveRange(req: Request, res: Response, file: string, download = false) {
@@ -101,6 +109,49 @@ playbackRouter.all('/:id/artwork', (req, res) => {
   serveRange(req, res, item.file);
 });
 
+playbackRouter.all('/:id/dlna', (req, res, next) => {
+  try {
+    if (!['GET', 'HEAD'].includes(req.method)) return res.status(405).end();
+    if (!cors(req, res)) return res.status(403).end();
+    const verified = grant(req, 'dlna');
+    if (!verified) return res.status(401).json({ error: 'De tijdelijke DLNA-afspeellink is ongeldig of verlopen.' });
+    const item = db.prepare('SELECT file_path,color_transfer,subtitle_path,duration FROM media_items WHERE id=?').get(Number(req.params.id)) as any;
+    if (!item || !fs.existsSync(item.file_path)) return res.status(404).end();
+
+    const contentFeatures = 'DLNA.ORG_OP=10;DLNA.ORG_CI=1;DLNA.ORG_FLAGS=01700000000000000000000000000000';
+    res.status(200);
+    res.setHeader('Content-Type', 'video/mpeg');
+    res.setHeader('transferMode.dlna.org', 'Streaming');
+    res.setHeader('contentFeatures.dlna.org', contentFeatures);
+    const startSeconds = dlnaTimeSeekSeconds(req.headers['timeseekrange.dlna.org']);
+    const duration = Math.max(0, Number(item.duration) || 0);
+    if (duration > 0) res.setHeader('TimeSeekRange.dlna.org', `npt=${startSeconds.toFixed(3)}-${duration.toFixed(3)}/${duration.toFixed(3)}`);
+    if (req.method === 'HEAD') return res.end();
+
+    const process = createDlnaMpegTsStream(item.file_path, item.color_transfer, {
+      ...verified.options,
+      subtitlePath: item.subtitle_path,
+    }, startSeconds);
+    let finished = false;
+    const stop = () => {
+      if (!finished && process.exitCode === null && !process.killed) process.kill();
+    };
+    req.once('aborted', stop);
+    res.once('close', stop);
+    process.once('error', error => {
+      finished = true;
+      if (!res.headersSent) next(error);
+      else res.destroy(error);
+    });
+    process.once('close', code => {
+      finished = true;
+      if (code && !res.writableEnded) res.destroy(new Error(process.stderrLog || 'FFmpeg kon de DLNA-stream niet maken.'));
+    });
+    res.flushHeaders();
+    process.stdout.pipe(res);
+  } catch (error) { next(error); }
+});
+
 playbackRouter.all('/:id/hls/:file', async (req, res, next) => {
   try {
     if (!['GET', 'HEAD'].includes(req.method)) return res.status(405).end();
@@ -125,4 +176,4 @@ playbackRouter.all('/:id/hls/:file', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
-export const playbackRouteInternals = { cors, serveRange };
+export const playbackRouteInternals = { cors, serveRange, dlnaTimeSeekSeconds };

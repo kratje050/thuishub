@@ -1,10 +1,16 @@
-# ThuisHub 1.2.9
+# ThuisHub 1.2.10
 
 ThuisHub is een lokale Windows-mediaserver voor eigen films, series, muziek, foto's en Live TV/DVR. De beheerinterface blijft op `http://127.0.0.1:8787`; de Windows-app en browser gebruiken dezelfde lokale gegevens in `%APPDATA%\ThuisHub\data`.
 
 ## Metadata
 
 De ontwikkelversie gebruikt een modulaire metadata-laag: TVmaze voor series, optioneel OMDb voor films, lokale Kodi-NFO-bestanden, ingebedde bestandstags en een handmatige editor met veldlocks en herstelhistorie. API-keys blijven lokaal; externe afbeeldingen worden gecontroleerd en gecachet voordat de browser ze toont. Zie [Metadata en providers](docs/METADATA_PROVIDERS.md).
+
+## Nieuw in 1.2.10
+
+- DLNA-televisies krijgen bij transcoding nu een continue H.264/AAC-stereo MPEG-TS-stream in plaats van een HLS-afspeellijst.
+- ThuisHub stuurt volledige DIDL-Lite-afspeelmetadata en probeert bij een Samsung HTTP 500 veilig opnieuw zonder metadata.
+- Tijdzoeken via `TimeSeekRange.dlna.org` en begrensde LAN-toegang voor de nieuwe DLNA-stream zijn toegevoegd.
 
 ## Nieuw in 1.2.9
 
@@ -84,7 +90,7 @@ De softwarelogica en builds worden geautomatiseerd gecontroleerd, maar er is voo
 ## Starten
 
 - Geïnstalleerd: open **ThuisHub** via Start of de bureaubladsnelkoppeling.
-- Portable: open `release\ThuisHub-Portable-1.2.9.exe`.
+- Portable: open `release\ThuisHub-Portable-1.2.10.exe`.
 - Browser/server: dubbelklik `ThuisHub starten.cmd`.
 - Volledig afsluiten: kies **ThuisHub afsluiten** in het systeemvak.
 
@@ -121,7 +127,7 @@ npm run dist:win
 Releasegegevens maakt u na de builds met:
 
 ```powershell
-.\scripts\generate-release-metadata.ps1 -Version 1.2.9
+.\scripts\generate-release-metadata.ps1 -Version 1.2.10
 .\scripts\scan-release-secrets.ps1 -IncludeReleaseArtifacts
 ```
 

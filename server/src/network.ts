@@ -54,7 +54,7 @@ export function isLanClientAllowed(remoteAddress: string | undefined, selectedAd
 function allowedLanRequest(method: string, requestPath: string) {
   const routeRules: Array<[RegExp, string[]]> = [
     [/^\/api\/health$/, ['GET']],
-    [/^\/api\/playback\/\d+\/(?:file|download|subtitle|artwork|hls\/[a-zA-Z0-9._-]+)$/, ['GET', 'HEAD', 'OPTIONS']],
+    [/^\/api\/playback\/\d+\/(?:file|dlna|download|subtitle|artwork|hls\/[a-zA-Z0-9._-]+)$/, ['GET', 'HEAD', 'OPTIONS']],
     [/^\/api\/devices\/pair\/(?:request|claim)$/, ['POST']],
     [/^\/api\/device\/commands$/, ['GET']],
     [/^\/api\/device\/commands\/\d+\/ack$/, ['POST']],

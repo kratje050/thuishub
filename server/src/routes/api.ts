@@ -115,13 +115,19 @@ function playbackTarget(deviceId:string,userId:number){
   return{device,protocol:device.protocol,capabilities:device.capabilities,needsLan:device.protocol!=='local-browser'};
 }
 
-function playbackUrls(base:string,mediaId:number,sessionId:string,decision:any,hasSubtitle:boolean){
-  const resource=decision.mode==='direct_play'?'file':'hls';
+function playbackUrls(base:string,mediaId:number,sessionId:string,decision:any,hasSubtitle:boolean,protocol:string,filePath:string){
+  const resource=decision.mode==='direct_play'?'file':protocol==='dlna-upnp'?'dlna':'hls';
   const options={copyVideo:decision.copyVideo,copyAudio:decision.copyAudio,burnSubtitles:decision.burnSubtitles,targetBitrateMbps:decision.targetBitrateMbps,targetWidth:decision.targetWidth,targetHeight:decision.targetHeight};
   const playback=createPlaybackGrant({sessionId,resource,options},600);
   const subtitle=hasSubtitle?createPlaybackGrant({sessionId,resource:'subtitle'},600):'';
   const artwork=createPlaybackGrant({sessionId,resource:'artwork'},600);
-  return{playback:`${base}/api/playback/${mediaId}/${resource==='file'?'file':'hls/index.m3u8'}?token=${encodeURIComponent(playback)}`,subtitle:subtitle?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitle)}`:'',artwork:`${base}/api/playback/${mediaId}/artwork?token=${encodeURIComponent(artwork)}`,expiresInSeconds:600,slidingWhileSessionActive:true};
+  const route=resource==='file'?'file':resource==='dlna'?'dlna':'hls/index.m3u8';
+  const detectedMime=String(mime.lookup(filePath)||'video/mp4');
+  const directMime=detectedMime==='video/mp2t'?'video/mpeg':detectedMime;
+  const dlnaProtocolInfo=resource==='dlna'
+    ?'http-get:*:video/mpeg:DLNA.ORG_OP=10;DLNA.ORG_CI=1;DLNA.ORG_FLAGS=01700000000000000000000000000000'
+    :`http-get:*:${directMime}:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000`;
+  return{playback:`${base}/api/playback/${mediaId}/${route}?token=${encodeURIComponent(playback)}`,subtitle:subtitle?`${base}/api/playback/${mediaId}/subtitle?token=${encodeURIComponent(subtitle)}`:'',artwork:`${base}/api/playback/${mediaId}/artwork?token=${encodeURIComponent(artwork)}`,dlnaProtocolInfo,expiresInSeconds:600,slidingWhileSessionActive:true};
 }
 
 function dlnaController(deviceId:string){
@@ -131,9 +137,11 @@ function dlnaController(deviceId:string){
   return new DlnaController({address:device.address,services});
 }
 
-function dlnaMetadata(title:string,artworkUrl:string){
+function dlnaMetadata(title:string,playbackUrl:string,protocolInfo:string,artworkUrl:string,durationSeconds:number){
   const escape=(value:string)=>value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char]!));
-  return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="0" restricted="1"><dc:title>${escape(title)}</dc:title><upnp:class>object.item.videoItem</upnp:class>${artworkUrl?`<upnp:albumArtURI>${escape(artworkUrl)}</upnp:albumArtURI>`:''}</item></DIDL-Lite>`;
+  const total=Math.max(0,Math.floor(Number(durationSeconds)||0));
+  const duration=`${String(Math.floor(total/3600)).padStart(2,'0')}:${String(Math.floor(total%3600/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`;
+  return `<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="0" restricted="1"><dc:title>${escape(title)}</dc:title><upnp:class>object.item.videoItem</upnp:class>${artworkUrl?`<upnp:albumArtURI>${escape(artworkUrl)}</upnp:albumArtURI>`:''}<res protocolInfo="${escape(protocolInfo)}" duration="${duration}">${escape(playbackUrl)}</res></item></DIDL-Lite>`;
 }
 
 function sessionPresentation(session:any,row:any,target:any,urls:any){
@@ -183,7 +191,7 @@ async function beginPlaybackOnDevice(input:{userId:number;admin:boolean;maxConte
     else if(!getPlaybackSession(session.id,input.userId)?.endedAt)stopPlaybackSession({id:session.id,userId:input.userId,reason});
   };
   let urls:ReturnType<typeof playbackUrls>;
-  try{urls=playbackUrls(base,input.mediaId,session.id,decision,Boolean(row.subtitle_path))}
+  try{urls=playbackUrls(base,input.mediaId,session.id,decision,Boolean(row.subtitle_path),target.protocol,row.file_path)}
   catch(error){await failNewSession('load-failed');throw error}
   if((target.protocol==='thuishub-tv-app'||target.protocol==='android-tv'||target.protocol==='samsung-tizen')&&input.dispatchLoad!==false){
     try{dispatchDeviceCommand(input.deviceId,'load',{sessionId:session.id,mediaId:input.mediaId,title:row.title,position:session.position,urls,decision})}
@@ -194,7 +202,7 @@ async function beginPlaybackOnDevice(input:{userId:number;admin:boolean;maxConte
         controller:dlnaController(input.deviceId),
         session,
         uri:urls.playback,
-        metadata:dlnaMetadata(row.title,urls.artwork),
+        metadata:dlnaMetadata(row.title,urls.playback,urls.dlnaProtocolInfo,urls.artwork,Number(row.duration)||0),
       });
       session=started.session;
     }catch(error){throw Object.assign(new Error(`De DLNA-tv kon het afspelen niet starten: ${error instanceof Error?error.message:String(error)}`),{status:502})}

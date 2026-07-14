@@ -17,7 +17,8 @@ fs.writeFileSync(mediaFile, Buffer.from('0123456789abcdefghijklmnopqrstuvwxyz'))
 const database = await import('./db.js');
 const tokens = await import('./playback-tokens.js');
 const sessions = await import('./playback-devices/sessions.js');
-const { playbackRouter } = await import('./routes/playback.js');
+const { playbackRouter, playbackRouteInternals } = await import('./routes/playback.js');
+const { dlnaMpegTsArgs } = await import('./transcode.js');
 
 const userId = Number(database.db.prepare("INSERT INTO users(username,password_hash,role) VALUES('route-test','test','admin')").run().lastInsertRowid);
 const sourceId = Number(database.db.prepare("INSERT INTO sources(name,path,kind) VALUES('Routetest','C:/Routetest','movies')").run().lastInsertRowid);
@@ -32,6 +33,11 @@ afterAll(() => { database.db.close(); fs.rmSync(root, { recursive: true, force: 
 function sessionToken() {
   const session = sessions.createPlaybackSession({ userId, mediaId, deviceId: 'route-tv', protocol: 'dlna-upnp', state: 'playing', duration: 100 });
   return { session, token: tokens.createPlaybackGrant({ sessionId: session.id, resource: 'file' }) };
+}
+
+function dlnaToken() {
+  const session = sessions.createPlaybackSession({ userId, mediaId, deviceId: 'route-tv', protocol: 'dlna-upnp', state: 'playing', duration: 100 });
+  return { session, token: tokens.createPlaybackGrant({ sessionId: session.id, resource: 'dlna', options: { copyVideo: false, copyAudio: false, targetWidth: 1920 } }) };
 }
 
 describe('beveiligde playbackroutes', () => {
@@ -80,5 +86,26 @@ describe('beveiligde playbackroutes', () => {
     expect((await request(app).get(`/api/playback/${mediaId}/file?token=${encodeURIComponent(token)}`)).status).toBe(200);
     sessions.stopPlaybackSession({ id: session.id, revision: session.revision, position: 50, duration: 100 });
     expect((await request(app).get(`/api/playback/${mediaId}/file?token=${encodeURIComponent(token)}`)).status).toBe(401);
+  });
+
+  it('biedt de Samsung-compatibele DLNA-stream met tijdseek- en MPEG-TS-headers aan', async () => {
+    const { token } = dlnaToken();
+    const response = await request(app).head(`/api/playback/${mediaId}/dlna?token=${encodeURIComponent(token)}`)
+      .set('TimeSeekRange.dlna.org', 'npt=00:00:12.500-');
+    expect(response.status).toBe(200);
+    expect(response.headers).toMatchObject({
+      'content-type': 'video/mpeg',
+      'transfermode.dlna.org': 'Streaming',
+      'timeseekrange.dlna.org': 'npt=12.500-100.000/100.000',
+    });
+    expect(response.headers['contentfeatures.dlna.org']).toContain('DLNA.ORG_OP=10');
+    expect(playbackRouteInternals.dlnaTimeSeekSeconds('npt=75.25-')).toBe(75.25);
+    expect(playbackRouteInternals.dlnaTimeSeekSeconds('ongeldig')).toBe(0);
+  });
+
+  it('maakt een begrensde H.264/AAC-stereo MPEG-TS-opdracht voor DLNA', () => {
+    const args = dlnaMpegTsArgs(mediaFile, 'bt709', { targetWidth: 1920, targetBitrateMbps: 12 }, 12.5);
+    expect(args).toEqual(expect.arrayContaining(['-ss', '12.500', '-c:a', 'aac', '-ac', '2', '-f', 'mpegts', 'pipe:1']));
+    expect(args.join(' ')).toContain('-mpegts_flags +resend_headers');
   });
 });
