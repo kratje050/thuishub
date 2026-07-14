@@ -10,7 +10,7 @@ Installeer Android Studio met SDK Platform 35 en voer uit:
 .\scripts\build-android-tv.ps1
 ```
 
-Uitvoer: `release\ThuisHub-Android-1.2.6.apk`, plus `release\ThuisHub-Android-TV-1.2.6.apk` als identieke compatibiliteitsnaam. Dit is een lokaal debug-ondertekende APK voor sideloadtests, geen Play Store-release. Open de universele APK op het Android-apparaat of installeer met `adb install -r <apk>` wanneer USB/netwerkdebugging bewust is ingeschakeld. De Android-app controleert bij iedere start rechtstreeks het stabiele manifest op GitHub Releases en vereist daarvoor geen gekoppelde ThuisHub-server.
+Uitvoer: `release\ThuisHub-Android-1.2.7.apk`, plus `release\ThuisHub-Android-TV-1.2.7.apk` als identieke compatibiliteitsnaam. Dit is een lokaal debug-ondertekende APK voor sideloadtests, geen Play Store-release. Open de universele APK op het Android-apparaat of installeer met `adb install -r <apk>` wanneer USB/netwerkdebugging bewust is ingeschakeld. De Android-app controleert bij iedere start rechtstreeks het stabiele manifest op GitHub Releases en vereist daarvoor geen gekoppelde ThuisHub-server.
 
 ## Gebruik
 

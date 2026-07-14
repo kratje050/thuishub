@@ -56,7 +56,7 @@ import java.util.UUID
 class MainActivity : ComponentActivity() {
     companion object {
         private const val SERVICE_TYPE = "_thuishub._tcp."
-        private const val APP_VERSION = "1.2.6"
+        private const val APP_VERSION = "1.2.7"
         private const val UPDATE_MANIFEST_URL = "https://github.com/kratje050/thuishub/releases/latest/download/latest.json"
         private const val MAX_MANIFEST_BYTES = 256 * 1024
         private const val MAX_APK_BYTES = 200L * 1024 * 1024
@@ -96,7 +96,7 @@ class MainActivity : ComponentActivity() {
     }
     private val server get() = preferences.getString("server", "")!!.trimEnd('/')
     private val token get() = preferences.getString("deviceToken", "")!!
-    private val automaticConnectionEnabled get() = preferences.getBoolean("automaticConnectionEnabled", false)
+    private val automaticConnectionEnabled get() = preferences.getBoolean("automaticConnectionEnabled", true)
     private val stableDeviceId: String by lazy {
         preferences.getString("deviceId", null) ?: UUID.randomUUID().toString().also {
             preferences.edit().putString("deviceId", it).apply()

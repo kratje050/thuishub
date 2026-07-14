@@ -1,5 +1,11 @@
 # Wijzigingen
 
+## 1.2.7 — 14 juli 2026
+
+- Automatisch zoeken en verbinden staat op nieuwe Android-installaties standaard aan, zonder Home, Instellingen of Updates te blokkeren.
+- Een eerder bewust uitgeschakelde instelling blijft uitgeschakeld.
+- De lokale Windows-netwerkdiagnose en begrensde privé-LAN-firewallregels zijn gecontroleerd met telefoon- en DLNA-detectie.
+
 ## 1.2.6 — 14 juli 2026
 
 - De Windows-app en browserserver controleren bij iedere start automatisch en niet-blokkerend op de nieuwste GitHub-release.
